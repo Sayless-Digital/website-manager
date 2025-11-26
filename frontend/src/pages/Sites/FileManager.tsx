@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { 
+import {
   Folder, RefreshCw, Home, Upload, 
   Plus, Search, Download, Trash2, Save, X, ChevronRight,
   FileCode, FileImage, FileText, FileArchive, File, Globe
@@ -227,12 +227,12 @@ export default function FileManager() {
 
   // Helper to get file icon
   const getFileIcon = (file: FileInfo) => {
-    if (file.type === 'dir') return <Folder className="h-5 w-5 text-blue-500" />;
+    if (file.type === 'dir') return <Folder className="h-5 w-5 text-primary" />;
     const ext = file.name.split('.').pop()?.toLowerCase();
-    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext || '')) return <FileImage className="h-5 w-5 text-purple-500" />;
-    if (['js', 'jsx', 'ts', 'tsx', 'css', 'html', 'php', 'json', 'py'].includes(ext || '')) return <FileCode className="h-5 w-5 text-yellow-500" />;
-    if (['zip', 'tar', 'gz', 'rar'].includes(ext || '')) return <FileArchive className="h-5 w-5 text-red-500" />;
-    return <FileText className="h-5 w-5 text-gray-500" />;
+    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext || '')) return <FileImage className="h-5 w-5 text-purple-500 dark:text-purple-400" />;
+    if (['js', 'jsx', 'ts', 'tsx', 'css', 'html', 'php', 'json', 'py'].includes(ext || '')) return <FileCode className="h-5 w-5 text-yellow-500 dark:text-yellow-400" />;
+    if (['zip', 'tar', 'gz', 'rar'].includes(ext || '')) return <FileArchive className="h-5 w-5 text-red-500 dark:text-red-400" />;
+    return <FileText className="h-5 w-5 text-muted-foreground" />;
   };
 
   // Format file size
@@ -334,51 +334,68 @@ export default function FileManager() {
   }
 
   return (
-    <div className="h-[calc(100vh-100px)] flex flex-col">
-      {/* Tab Bar - Only show if files are open */}
-      {openFiles.length > 0 && (
-        <div className="border-b px-4 bg-muted/30 flex items-center">
-          <div className="flex items-center h-10">
-            <button
-              onClick={() => setActiveTab('browser')}
-              className={cn(
-                "flex items-center gap-2 h-10 px-4 rounded-none border-b-2 transition-colors",
-                activeTab === 'browser' 
-                  ? "bg-background border-primary" 
-                  : "border-transparent hover:bg-muted/50"
-              )}
+    <div className="space-y-6">
+      {/* Tab Bar */}
+      <div className="flex items-center gap-2 border-b pb-2">
+        <button
+          onClick={() => setActiveTab('browser')}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors",
+            activeTab === 'browser' 
+              ? "bg-primary text-primary-foreground" 
+              : "hover:bg-muted"
+          )}
+        >
+          <Folder className="h-4 w-4" />
+          Browser
+        </button>
+        {openFiles.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={cn(
+              "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors group",
+              activeTab === t.id 
+                ? "bg-primary text-primary-foreground" 
+                : "hover:bg-muted"
+            )}
+          >
+            <span className="max-w-[150px] truncate">{t.name}</span>
+            {t.isDirty && <span className="h-2 w-2 rounded-full bg-yellow-500" />}
+            <div 
+              role="button"
+              onClick={(e) => handleCloseTab(t.id, e)}
+              className="opacity-0 group-hover:opacity-100 hover:bg-muted rounded-full p-0.5"
             >
-              <Folder className="h-4 w-4" />
-              Browser
-            </button>
-            {openFiles.map(t => (
-              <button
-                key={t.id}
-                onClick={() => setActiveTab(t.id)}
-                className={cn(
-                  "flex items-center gap-2 h-10 px-4 rounded-none border-b-2 transition-colors group",
-                  activeTab === t.id 
-                    ? "bg-background border-primary" 
-                    : "border-transparent hover:bg-muted/50"
-                )}
-              >
-                <span className="max-w-[150px] truncate">{t.name}</span>
-                {t.isDirty && <span className="h-2 w-2 rounded-full bg-yellow-500" />}
-                <div 
-                  role="button"
-                  onClick={(e) => handleCloseTab(t.id, e)}
-                  className="opacity-0 group-hover:opacity-100 hover:bg-muted rounded-full p-0.5"
-                >
-                  <X className="h-3 w-3" />
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+              <X className="h-3 w-3" />
+            </div>
+          </button>
+        ))}
+        <button
+          onClick={() => {
+            // Create a new empty file tab
+            const newTabId = `file-${Date.now()}`;
+            const newTab: EditorTab = {
+              id: newTabId,
+              name: 'untitled',
+              path: currentPath === '/' ? '/untitled' : `${currentPath}/untitled`,
+              content: '',
+              originalContent: '',
+              isDirty: false,
+              loading: false,
+            };
+            setOpenFiles([...openFiles, newTab]);
+            setActiveTab(newTabId);
+          }}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
+          title="New Tab"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+      </div>
 
       {/* Top Control Bar */}
-      <div className="p-4 border-b flex items-center gap-4">
+      <div className="flex items-center gap-4">
               {/* Search - Left */}
               <div className="relative flex-1 max-w-md">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -388,19 +405,19 @@ export default function FileManager() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
-              </div>
+                        </div>
 
               {/* Buttons - Middle */}
               <div className="flex items-center gap-2">
                 {showNewFolderInput ? (
                   <form onSubmit={handleCreateFolder} className="flex gap-2">
-                    <Input 
-                      placeholder="Folder name" 
+                        <Input
+                          placeholder="Folder name"
                       className="h-9 w-[150px]"
-                      value={newFolderName}
-                      onChange={(e) => setNewFolderName(e.target.value)}
-                      autoFocus
-                    />
+                          value={newFolderName}
+                          onChange={(e) => setNewFolderName(e.target.value)}
+                          autoFocus
+                        />
                     <Button type="submit" size="sm" className="h-9">Create</Button>
                     <Button 
                       type="button" 
@@ -410,17 +427,17 @@ export default function FileManager() {
                       onClick={() => { setShowNewFolderInput(false); setNewFolderName(''); }}
                     >
                       <X className="h-4 w-4" />
-                    </Button>
+                          </Button>
                   </form>
                 ) : showNewFileInput ? (
                   <form onSubmit={handleCreateFile} className="flex gap-2">
-                    <Input 
+                        <Input
                       placeholder="File name" 
                       className="h-9 w-[150px]"
-                      value={newFileName}
-                      onChange={(e) => setNewFileName(e.target.value)}
-                      autoFocus
-                    />
+                          value={newFileName}
+                          onChange={(e) => setNewFileName(e.target.value)}
+                          autoFocus
+                        />
                     <Button type="submit" size="sm" className="h-9">Create</Button>
                     <Button 
                       type="button" 
@@ -430,10 +447,10 @@ export default function FileManager() {
                       onClick={() => { setShowNewFileInput(false); setNewFileName(''); }}
                     >
                       <X className="h-4 w-4" />
-                    </Button>
+                        </Button>
                   </form>
-                ) : (
-                  <>
+                    ) : (
+                      <>
                     <Button variant="outline" size="sm" onClick={() => setShowNewFolderInput(true)}>
                       <Plus className="h-4 w-4 mr-2" />
                       New Folder
@@ -468,50 +485,55 @@ export default function FileManager() {
       </div>
 
       {/* Breadcrumb */}
-      <div className="px-4 py-2 border-b">
-        <div className="flex items-center gap-2 text-sm">
+      <div className="flex items-center gap-2 text-sm">
+        <button 
+          onClick={() => setCurrentPath('/')}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-card border hover:bg-accent transition-colors"
+        >
           <Globe className="h-4 w-4 text-muted-foreground" />
-          <span className="font-medium text-muted-foreground">{domain}</span>
-          <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          <button 
-            onClick={() => setCurrentPath('/')}
-            className="font-medium hover:text-foreground transition-colors flex items-center gap-1"
-          >
-            <Folder className="h-4 w-4" />
-            public_html
-          </button>
-          {currentPath.split('/').filter(Boolean).map((part, i, arr) => (
-            <div key={i} className="flex items-center gap-2">
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              <button
-                onClick={() => {
-                  const newPath = '/' + arr.slice(0, i + 1).join('/');
-                  setCurrentPath(newPath);
-                }}
-                className="font-medium hover:text-foreground transition-colors"
-              >
-                {part}
-              </button>
-            </div>
-          ))}
-        </div>
+          <span className="font-medium">{domain}</span>
+                </button>
+        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                <button
+          onClick={() => setCurrentPath('/')}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-card border hover:bg-accent transition-colors"
+        >
+          <Folder className="h-4 w-4 text-primary" />
+          <span className="font-medium">public_html</span>
+                </button>
+        {currentPath.split('/').filter(Boolean).map((part, i, arr) => (
+          <>
+            <ChevronRight key={`chevron-${i}`} className="h-4 w-4 text-muted-foreground" />
+                <button
+              key={`button-${i}`}
+              onClick={() => {
+                const newPath = '/' + arr.slice(0, i + 1).join('/');
+                setCurrentPath(newPath);
+              }}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-card border hover:bg-accent transition-colors"
+            >
+              <Folder className="h-4 w-4 text-primary" />
+              <span className="font-medium">{part}</span>
+                </button>
+              </>
+        ))}
       </div>
 
       {/* File List */}
-      <div className="flex-1 overflow-auto p-4">
-        <div className="border rounded-lg">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted text-left border-b">
-                    <tr>
-                      <th className="p-3 font-medium w-8">
-                        <input type="checkbox" className="rounded" />
-                      </th>
-                      <th className="p-3 font-medium">Name</th>
-                      <th className="p-3 font-medium">Modified</th>
-                      <th className="p-3 font-medium">Size</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
+      <div className="border rounded-lg overflow-hidden">
+        <div className="h-[65vh] overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted text-left border-b sticky top-0 z-10">
+              <tr>
+                <th className="p-3 font-medium w-8 bg-muted">
+                  <input type="checkbox" className="rounded" />
+                </th>
+                <th className="p-3 font-medium bg-muted">Name</th>
+                <th className="p-3 font-medium bg-muted">Modified</th>
+                <th className="p-3 font-medium bg-muted">Size</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
                     {currentPath !== '/' && (
                       <tr 
                         className="hover:bg-muted/50 cursor-pointer"
@@ -544,10 +566,7 @@ export default function FileManager() {
                         <td className="p-3">
                           <div className="flex items-center gap-3">
                             {getFileIcon(file)}
-                            <span className={cn(
-                              "font-medium",
-                              file.type === 'dir' ? "text-blue-600" : "text-foreground"
-                            )}>
+                            <span className="font-medium text-foreground">
                               {file.name}
                             </span>
                           </div>
@@ -567,10 +586,10 @@ export default function FileManager() {
                         </td>
                       </tr>
                     )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
