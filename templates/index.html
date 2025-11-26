@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Website Manager - cPanel Alternative</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2><i class="fas fa-server"></i> Website Manager</h2>
+        </div>
+        <ul class="sidebar-menu">
+            <li><a href="#" onclick="showSection('dashboard'); return false;" class="active" data-section="dashboard">
+                <i class="fas fa-home"></i> Dashboard
+            </a></li>
+            <li><a href="#" onclick="showSection('sites'); return false;" data-section="sites">
+                <i class="fas fa-globe"></i> Websites
+            </a></li>
+            <li><a href="#" onclick="showSection('services'); return false;" data-section="services">
+                <i class="fas fa-cogs"></i> Services
+            </a></li>
+            <li><a href="#" onclick="showSection('resources'); return false;" data-section="resources">
+                <i class="fas fa-chart-line"></i> Resources
+            </a></li>
+            <li><a href="#" onclick="showSection('cron'); return false;" data-section="cron">
+                <i class="fas fa-clock"></i> Cron Jobs
+            </a></li>
+        </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Header -->
+        <header class="top-header">
+            <div class="header-content">
+                <div style="display: flex; align-items: center; gap: 16px;">
+                    <button class="btn btn-primary btn-sm mobile-menu-toggle" onclick="toggleSidebar()" style="display: none;">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <h1 id="pageTitle">Dashboard</h1>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-primary" onclick="refreshAll()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Dashboard Section -->
+        <section id="dashboard" class="content-section active">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: #3b82f6;">
+                        <i class="fas fa-globe"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3 id="totalSites">0</h3>
+                        <p>Total Websites</p>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: #10b981;">
+                        <i class="fas fa-database"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3 id="totalDatabases">0</h3>
+                        <p>Databases</p>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: #f59e0b;">
+                        <i class="fas fa-hdd"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3 id="diskUsage">-</h3>
+                        <p>Disk Usage</p>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: #ef4444;">
+                        <i class="fas fa-memory"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3 id="memoryUsage">-</h3>
+                        <p>Memory Usage</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="dashboard-grid">
+                <div class="dashboard-card">
+                    <h3><i class="fas fa-globe"></i> Recent Websites</h3>
+                    <div id="recentSites" class="site-list">
+                        <!-- Sites will be loaded here -->
+                    </div>
+                </div>
+                <div class="dashboard-card">
+                    <h3><i class="fas fa-cogs"></i> Service Status</h3>
+                    <div id="serviceStatus" class="service-list">
+                        <!-- Services will be loaded here -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Sites Section -->
+        <section id="sites" class="content-section">
+            <div class="section-header">
+                <h2><i class="fas fa-globe"></i> Websites</h2>
+                <div class="section-actions">
+                    <input type="text" id="siteSearch" placeholder="Search sites..." class="search-input" onkeyup="filterSites()">
+                </div>
+            </div>
+            <div class="sites-grid" id="sitesGrid">
+                <!-- Sites will be loaded here -->
+            </div>
+        </section>
+
+        <!-- Services Section -->
+        <section id="services" class="content-section">
+            <div class="section-header">
+                <h2><i class="fas fa-cogs"></i> System Services</h2>
+            </div>
+            <div class="services-grid" id="servicesGrid">
+                <!-- Services will be loaded here -->
+            </div>
+        </section>
+
+        <!-- Resources Section -->
+        <section id="resources" class="content-section">
+            <div class="section-header">
+                <h2><i class="fas fa-chart-line"></i> System Resources</h2>
+            </div>
+            <div class="resources-grid">
+                <div class="resource-card">
+                    <h3>CPU Usage</h3>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="cpuProgress">
+                            <div class="progress-fill" id="cpuFill" style="width: 0%"></div>
+                        </div>
+                        <span id="cpuPercent">0%</span>
+                    </div>
+                    <p class="resource-info">Cores: <span id="cpuCores">-</span></p>
+                </div>
+                <div class="resource-card">
+                    <h3>Memory Usage</h3>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="memoryProgress">
+                            <div class="progress-fill" id="memoryFill" style="width: 0%"></div>
+                        </div>
+                        <span id="memoryPercent">0%</span>
+                    </div>
+                    <p class="resource-info">
+                        Used: <span id="memoryUsed">-</span> / <span id="memoryTotal">-</span>
+                    </p>
+                </div>
+                <div class="resource-card">
+                    <h3>Disk Usage</h3>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="diskProgress">
+                            <div class="progress-fill" id="diskFill" style="width: 0%"></div>
+                        </div>
+                        <span id="diskPercent">0%</span>
+                    </div>
+                    <p class="resource-info">
+                        Used: <span id="diskUsed">-</span> / <span id="diskTotal">-</span>
+                    </p>
+                </div>
+                <div class="resource-card">
+                    <h3>System Information</h3>
+                    <div class="info-list" id="systemInfo">
+                        <!-- System info will be loaded here -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Cron Jobs Section -->
+        <section id="cron" class="content-section">
+            <div class="section-header">
+                <h2><i class="fas fa-clock"></i> Cron Jobs</h2>
+                <button class="btn btn-primary" onclick="loadCronJobs()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+            <div class="cron-list" id="cronList">
+                <!-- Cron jobs will be loaded here -->
+            </div>
+        </section>
+    </main>
+
+    <!-- Site Details Modal -->
+    <div id="siteModal" class="modal">
+        <div class="modal-content large-modal">
+            <div class="modal-header">
+                <h2 id="modalTitle">Site Management</h2>
+                <span class="close" onclick="closeModal()">&times;</span>
+            </div>
+            <div class="modal-tabs">
+                <button class="tab-btn active" onclick="showSiteTab('overview')" data-tab="overview">
+                    <i class="fas fa-info-circle"></i> Overview
+                </button>
+                <button class="tab-btn" onclick="showSiteTab('files')" data-tab="files">
+                    <i class="fas fa-folder"></i> File Manager
+                </button>
+                <button class="tab-btn" onclick="showSiteTab('database')" data-tab="database">
+                    <i class="fas fa-database"></i> Database
+                </button>
+                <button class="tab-btn" onclick="showSiteTab('logs')" data-tab="logs">
+                    <i class="fas fa-file-alt"></i> Logs
+                </button>
+                <button class="tab-btn" onclick="showSiteTab('wordpress')" data-tab="wordpress">
+                    <i class="fab fa-wordpress"></i> WordPress
+                </button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Content will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

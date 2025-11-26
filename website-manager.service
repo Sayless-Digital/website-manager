@@ -1,0 +1,21 @@
+[Unit]
+Description=Local Website Manager - cPanel-like interface
+After=network.target
+
+[Service]
+Type=simple
+User=mercury
+WorkingDirectory=/home/mercury/Documents/Storage/Websites/website-manager
+Environment="PATH=/home/mercury/Documents/Storage/Websites/website-manager/venv/bin"
+ExecStart=/home/mercury/Documents/Storage/Websites/website-manager/venv/bin/python3 app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+
+
+
+
+

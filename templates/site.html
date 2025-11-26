@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ domain }} - Website Manager</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2><i class="fas fa-server"></i> Website Manager</h2>
+        </div>
+        <ul class="sidebar-menu">
+            <li><a href="/" data-section="dashboard">
+                <i class="fas fa-home"></i> Dashboard
+            </a></li>
+            <li><a href="/#sites" data-section="sites">
+                <i class="fas fa-globe"></i> Websites
+            </a></li>
+            <li><a href="/#services" data-section="services">
+                <i class="fas fa-cogs"></i> Services
+            </a></li>
+            <li><a href="/#resources" data-section="resources">
+                <i class="fas fa-chart-line"></i> Resources
+            </a></li>
+            <li><a href="/#cron" data-section="cron">
+                <i class="fas fa-clock"></i> Cron Jobs
+            </a></li>
+        </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Header -->
+        <header class="top-header">
+            <div class="header-content">
+                <div style="display: flex; align-items: center; gap: 16px;">
+                    <button class="btn btn-primary btn-sm mobile-menu-toggle" onclick="toggleSidebar()" style="display: none;">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <a href="/" class="btn btn-primary btn-sm" style="text-decoration: none;">
+                        <i class="fas fa-arrow-left"></i> Back
+                    </a>
+                    <h1 id="pageTitle">{{ domain }}</h1>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-primary" onclick="refreshSiteData()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Site Management Content -->
+        <section class="content-section active" style="padding: 30px;">
+            <!-- Tabs -->
+            <div class="site-tabs">
+                <button class="tab-btn active" onclick="showSiteTab('overview')" data-tab="overview">
+                    <i class="fas fa-info-circle"></i> Overview
+                </button>
+                <button class="tab-btn" onclick="showSiteTab('files')" data-tab="files">
+                    <i class="fas fa-folder"></i> File Manager
+                </button>
+                <button class="tab-btn" onclick="showSiteTab('database')" data-tab="database">
+                    <i class="fas fa-database"></i> Database
+                </button>
+                <button class="tab-btn" onclick="showSiteTab('logs')" data-tab="logs">
+                    <i class="fas fa-file-alt"></i> Logs
+                </button>
+                <button class="tab-btn" onclick="showSiteTab('wordpress')" data-tab="wordpress">
+                    <i class="fab fa-wordpress"></i> WordPress
+                </button>
+            </div>
+
+            <!-- Tab Content -->
+            <div class="site-content" id="siteContent">
+                <div style="text-align: center; padding: 40px; color: var(--text-secondary);">
+                    <i class="fas fa-spinner fa-spin" style="font-size: 24px; margin-bottom: 16px;"></i>
+                    <p>Loading...</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <script>
+        window.currentDomain = '{{ domain }}';
+    </script>
+    <script src="{{ url_for('static', filename='js/site.js') }}"></script>
+</body>
+</html>
