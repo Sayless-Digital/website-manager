@@ -7,7 +7,8 @@ export interface BackupFile {
   size: number;
   date: string;
   path: string;
-  type: 'database' | 'files';
+  type: 'database' | 'files' | 'both';
+  folder?: string;
 }
 
 export interface BackupSettings {
@@ -19,14 +20,14 @@ export interface BackupSettings {
   time: string; // HH:MM format
 }
 
-export const useBackups = (domain: string, type: 'database' | 'files') => {
+export const useBackups = (domain: string, type?: 'database' | 'files') => {
   return useQuery({
     queryKey: ['backups', domain, type],
     queryFn: async () => {
-      const endpoint = type === 'database' 
-        ? API_ENDPOINTS.SITES.DATABASE_BACKUPS(domain)
-        : API_ENDPOINTS.SITES.FILE_BACKUPS(domain);
-      const { data } = await apiClient.get<BackupFile[]>(endpoint);
+      const { data } = await apiClient.get<BackupFile[]>(`/api/site/${domain}/backups`);
+      if (type) {
+        return data.filter(b => b.type === type);
+      }
       return data;
     },
     enabled: !!domain,
@@ -36,16 +37,42 @@ export const useBackups = (domain: string, type: 'database' | 'files') => {
 export const useCreateBackup = (domain: string) => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (type: 'database' | 'files') => {
-      const endpoint = type === 'database'
-        ? API_ENDPOINTS.SITES.DATABASE_BACKUP(domain)
-        : API_ENDPOINTS.SITES.FILE_BACKUP(domain);
-      const { data } = await apiClient.post(endpoint);
+    mutationFn: async (type: 'database' | 'files' | 'both') => {
+      const { data } = await apiClient.post(`/api/site/${domain}/backup`, { type });
       return data;
     },
-    onSuccess: (_, type) => {
-      queryClient.invalidateQueries({ queryKey: ['backups', domain, type] });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['backups', domain] });
     },
+  });
+};
+
+export const useBackupStatus = (domain: string, backupId: string | null) => {
+  return useQuery({
+    queryKey: ['backup-status', domain, backupId],
+    queryFn: async () => {
+      if (!backupId) return null;
+      const { data } = await apiClient.get(`/api/site/${domain}/backup/${backupId}/status`);
+      return data;
+    },
+    enabled: !!backupId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      // Keep polling if running, or if status is not_found (might still be starting)
+      return (status === 'running' || status === 'not_found') ? 1000 : false;
+    },
+  });
+};
+
+export const useActiveBackups = (domain: string) => {
+  return useQuery({
+    queryKey: ['active-backups', domain],
+    queryFn: async () => {
+      const { data } = await apiClient.get<Array<{ backup_id: string; status: string; message: string; progress: number; type: string; backup_folder?: string }>>(`/api/site/${domain}/backups/active`);
+      return data;
+    },
+    enabled: !!domain,
+    refetchInterval: 2000, // Poll every 2 seconds for active backups
   });
 };
 
@@ -64,14 +91,11 @@ export const useRestoreBackup = (domain: string) => {
 export const useDeleteBackup = (domain: string) => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ filename, type }: { filename: string; type: 'database' | 'files' }) => {
-      const endpoint = type === 'database'
-        ? API_ENDPOINTS.SITES.DATABASE_BACKUPS(domain) + `/${filename}`
-        : API_ENDPOINTS.SITES.FILE_BACKUPS(domain) + `/${filename}`;
-      await apiClient.delete(endpoint);
+    mutationFn: async ({ folder }: { folder: string }) => {
+      await apiClient.delete(`/api/site/${domain}/backups/${folder}`);
     },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['backups', domain, variables.type] });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['backups', domain] });
     },
   });
 };

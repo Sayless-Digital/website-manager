@@ -1,6 +1,7 @@
-// Simple notification utility
-// In a production app, you might want to use a toast library like sonner or react-hot-toast
+// Toast notification utility using sonner
+import { toast } from 'sonner';
 
+// Legacy callback support (for backwards compatibility)
 let notificationCallback: ((type: 'success' | 'error', message: string) => void) | null = null;
 
 export function setNotificationCallback(callback: (type: 'success' | 'error', message: string) => void) {
@@ -8,11 +9,16 @@ export function setNotificationCallback(callback: (type: 'success' | 'error', me
 }
 
 export function showNotification(type: 'success' | 'error', message: string) {
+  // Call legacy callback if set
   if (notificationCallback) {
     notificationCallback(type, message);
+  }
+  
+  // Show toast
+  if (type === 'success') {
+    toast.success(message);
   } else {
-    // Fallback to console or alert
-    console.log(`[${type.toUpperCase()}] ${message}`);
+    toast.error(message);
   }
 }
 

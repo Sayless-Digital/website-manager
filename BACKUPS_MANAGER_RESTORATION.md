@@ -147,3 +147,4 @@ Backup settings should be stored per-domain, either in:
 
 All frontend components are implemented, typed, and ready. The Backups Manager is fully functional once backend endpoints are implemented!
 
+

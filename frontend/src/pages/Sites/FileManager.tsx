@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,17 +25,42 @@ interface EditorTab {
   loading: boolean;
 }
 
+// Types for browser tabs
+interface BrowserTab {
+  id: string;
+  name: string;
+  currentPath: string;
+  searchQuery: string;
+}
+
 export default function FileManager() {
   const { domain } = useParams<{ domain: string }>();
-  const [currentPath, setCurrentPath] = useState('/');
-  const [activeTab, setActiveTab] = useState('browser');
+  const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([{
+    id: 'browser-0',
+    name: 'Files',
+    currentPath: '/',
+    searchQuery: ''
+  }]);
+  const [activeTab, setActiveTab] = useState('browser-0');
   const [openFiles, setOpenFiles] = useState<EditorTab[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
   const [newFolderName, setNewFolderName] = useState('');
   const [newFileName, setNewFileName] = useState('');
   const [showNewFolderInput, setShowNewFolderInput] = useState(false);
   const [showNewFileInput, setShowNewFileInput] = useState(false);
+  const [currentLine, setCurrentLine] = useState(1);
+  const [cursorPosition, setCursorPosition] = useState(0);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: FileInfo | null }>({ x: 0, y: 0, file: null });
+  const [searchFocused, setSearchFocused] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lineNumbersRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+
+  // Get current browser tab
+  const currentBrowserTab = browserTabs.find(t => t.id === activeTab) || browserTabs[0];
+  const currentPath = currentBrowserTab.currentPath;
+  const searchQuery = currentBrowserTab.searchQuery;
 
   // Hooks
   const { data: sites } = useSites();
@@ -47,6 +72,24 @@ export default function FileManager() {
   const deleteFile = useDeleteFile(domain!);
   const uploadFile = useUploadFile(domain!);
   const downloadFile = useDownloadFile();
+
+  // Update current browser tab path
+  const setCurrentPath = (path: string) => {
+    setBrowserTabs(prev => prev.map(tab => {
+      if (tab.id === activeTab) {
+        const folderName = path === '/' ? 'Files' : path.split('/').filter(Boolean).pop() || 'Files';
+        return { ...tab, currentPath: path, name: folderName };
+      }
+      return tab;
+    }));
+  };
+
+  // Update current browser tab search query
+  const setSearchQuery = (query: string) => {
+    setBrowserTabs(prev => prev.map(tab => 
+      tab.id === activeTab ? { ...tab, searchQuery: query } : tab
+    ));
+  };
 
   // Handle opening a file
   const handleOpenFile = async (file: FileInfo) => {
@@ -148,6 +191,16 @@ export default function FileManager() {
     }));
   };
 
+  // Handle cursor position change
+  const handleCursorChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const textarea = e.target;
+    const cursorPos = textarea.selectionStart;
+    const textBeforeCursor = textarea.value.substring(0, cursorPos);
+    const lineNumber = textBeforeCursor.split('\n').length;
+    setCursorPosition(cursorPos);
+    setCurrentLine(lineNumber);
+  };
+
   // Handle create folder
   const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -209,6 +262,69 @@ export default function FileManager() {
     }
   };
 
+  // Handle context menu
+  const handleContextMenu = (e: React.MouseEvent, file: FileInfo) => {
+    e.preventDefault();
+    
+    // Get viewport dimensions
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    
+    // Context menu dimensions (approximate)
+    const menuWidth = 180;
+    const menuHeight = file.type === 'file' ? 240 : 200; // More items for files
+    
+    // Calculate position, adjusting if it would go off-screen
+    let x = e.clientX;
+    let y = e.clientY;
+    
+    // Check right edge
+    if (x + menuWidth > viewportWidth) {
+      x = viewportWidth - menuWidth - 10;
+    }
+    
+    // Check bottom edge
+    if (y + menuHeight > viewportHeight) {
+      y = viewportHeight - menuHeight - 10;
+    }
+    
+    // Ensure menu doesn't go off top or left edges
+    x = Math.max(10, x);
+    y = Math.max(10, y);
+    
+    setContextMenu({ x, y, file });
+  };
+
+  // Close context menu on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu({ x: 0, y: 0, file: null });
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Handle opening file in new tab
+  const handleOpenInNewTab = async (file: FileInfo) => {
+    if (file.type === 'dir') {
+      const newTabId = `browser-${Date.now()}`;
+      const newTab: BrowserTab = {
+        id: newTabId,
+        name: file.name,
+        currentPath: file.path,
+        searchQuery: ''
+      };
+      setBrowserTabs([...browserTabs, newTab]);
+      setActiveTab(newTabId);
+    } else {
+      await handleOpenFile(file);
+    }
+    setContextMenu({ x: 0, y: 0, file: null });
+  };
+
   // Handle upload
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -250,83 +366,233 @@ export default function FileManager() {
   ) || [];
 
   // Show editor if file is open, otherwise show browser
-  if (activeTab !== 'browser' && openFiles.find(t => t.id === activeTab)) {
+  const isEditorTab = openFiles.find(t => t.id === activeTab);
+  const isBrowserTab = browserTabs.find(t => t.id === activeTab);
+  
+  if (isEditorTab) {
     const tab = openFiles.find(t => t.id === activeTab);
     if (!tab) return null;
 
+    const totalLines = tab.content.split('\n').length;
+    const totalChars = tab.content.length;
+    const lines = tab.content.split('\n');
+
     return (
-      <div className="h-[calc(100vh-100px)] flex flex-col">
-        <div className="border-b px-4 bg-muted/30 flex items-center">
-          <div className="flex items-center h-10">
+      <div className="h-[calc(100vh-8rem)] flex flex-col gap-6 overflow-hidden">
+        {/* Tab Bar */}
+        <div className="flex items-center gap-1">
+          {browserTabs.map(t => {
+            const folderName = t.currentPath === '/' ? 'Files' : t.currentPath.split('/').filter(Boolean).pop() || 'Files';
+            return (
             <button
-              onClick={() => setActiveTab('browser')}
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              onMouseDown={(e) => {
+                if (e.button === 1 && browserTabs.length > 1) { // Middle mouse button
+                  e.preventDefault();
+                  setBrowserTabs(prev => prev.filter(tab => tab.id !== t.id));
+                  if (activeTab === t.id) {
+                    const remaining = browserTabs.filter(tab => tab.id !== t.id);
+                    setActiveTab(remaining.length > 0 ? remaining[0].id : (openFiles.length > 0 ? openFiles[0].id : 'browser-0'));
+                  }
+                }
+              }}
               className={cn(
-                "flex items-center gap-2 h-10 px-4 rounded-none border-b-2 transition-colors",
-                activeTab === 'browser' 
-                  ? "bg-background border-primary" 
-                  : "border-transparent hover:bg-muted/50"
+                "flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors group",
+                activeTab === t.id 
+                  ? "bg-amber-50 border-amber-200 text-foreground" 
+                  : "bg-background border-border hover:bg-muted/50"
               )}
             >
-              <Folder className="h-4 w-4" />
-              Browser
-            </button>
-            {openFiles.map(t => (
-              <button
-                key={t.id}
-                onClick={() => setActiveTab(t.id)}
-                className={cn(
-                  "flex items-center gap-2 h-10 px-4 rounded-none border-b-2 transition-colors group",
-                  activeTab === t.id 
-                    ? "bg-background border-primary" 
-                    : "border-transparent hover:bg-muted/50"
-                )}
-              >
-                <span className="max-w-[150px] truncate">{t.name}</span>
-                {t.isDirty && <span className="h-2 w-2 rounded-full bg-yellow-500" />}
+              <Folder className="h-3.5 w-3.5" />
+              <span className="max-w-[150px] truncate">{folderName}</span>
+              {browserTabs.length > 1 && (
                 <div 
                   role="button"
-                  onClick={(e) => handleCloseTab(t.id, e)}
-                  className="opacity-0 group-hover:opacity-100 hover:bg-muted rounded-full p-0.5"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setBrowserTabs(prev => prev.filter(tab => tab.id !== t.id));
+                    if (activeTab === t.id) {
+                      const remaining = browserTabs.filter(tab => tab.id !== t.id);
+                      setActiveTab(remaining.length > 0 ? remaining[0].id : (openFiles.length > 0 ? openFiles[0].id : 'browser-0'));
+                    }
+                  }}
+                  className="hover:bg-muted rounded p-0.5 ml-1"
                 >
                   <X className="h-3 w-3" />
                 </div>
-              </button>
-            ))}
+             )}
+           </button>
+           );
+           })}
+         {openFiles.map(t => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              onMouseDown={(e) => {
+                if (e.button === 1) { // Middle mouse button
+                  e.preventDefault();
+                  handleCloseTab(t.id);
+                }
+              }}
+               className={cn(
+                 "flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors group",
+                 activeTab === t.id 
+                   ? "bg-amber-50 border-amber-200 text-foreground" 
+                   : "bg-background border-border hover:bg-muted/50"
+               )}
+             >
+               <File className="h-3.5 w-3.5" />
+              <span className="max-w-[150px] truncate">{t.name}</span>
+              {t.isDirty && <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" />}
+              <div 
+                role="button"
+                onClick={(e) => handleCloseTab(t.id, e)}
+                className="hover:bg-muted rounded p-0.5 ml-1"
+              >
+                <X className="h-3 w-3" />
+              </div>
+            </button>
+          ))}
+          <button
+            onClick={() => {
+              const newTabId = `browser-${Date.now()}`;
+              const newTab: BrowserTab = {
+                id: newTabId,
+                name: `Files ${browserTabs.length + 1}`,
+                currentPath: '/',
+                searchQuery: ''
+              };
+              setBrowserTabs([...browserTabs, newTab]);
+              setActiveTab(newTabId);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg bg-background hover:bg-muted/50 transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New Tab
+          </button>
+        </div>
+
+        {/* Editor Header */}
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">Editing: {tab.name}</h2>
+          <div className="flex items-center gap-2 ml-auto">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => handleCloseTab(tab.id)}
+              disabled={tab.loading}
+            >
+              Close
+            </Button>
+            <Button 
+              variant="default" 
+              size="sm"
+              onClick={() => handleSaveFile(tab.id)}
+              disabled={!tab.isDirty || tab.loading}
+            >
+              <Save className="h-4 w-4 mr-2" />
+              Save
+            </Button>
           </div>
         </div>
-        <div className="flex-1 flex flex-col">
-          <div className="p-2 border-b bg-card flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground px-2">{tab.path}</span>
-              {tab.isDirty && (
-                <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">Unsaved Changes</Badge>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <Button 
-                variant="default" 
-                size="sm"
-                onClick={() => handleSaveFile(tab.id)}
-                disabled={!tab.isDirty}
-              >
-                <Save className="h-4 w-4 mr-2" />
-                Save
-              </Button>
-            </div>
-          </div>
-          <div className="flex-1 relative">
+
+        {/* Editor */}
+        <div className="border rounded-lg overflow-hidden">
+          <div className="h-[65vh] relative flex">
             {tab.loading ? (
               <div className="absolute inset-0 flex items-center justify-center bg-background/50">
                 <RefreshCw className="h-8 w-8 animate-spin text-primary" />
               </div>
             ) : (
-              <textarea
-                className="w-full h-full p-4 font-mono text-sm resize-none bg-background focus:outline-none"
-                value={tab.content}
-                onChange={(e) => handleContentChange(tab.id, e.target.value)}
-                spellCheck={false}
-              />
+              <>
+                {/* Line Numbers */}
+                <div
+                  ref={lineNumbersRef}
+                  className="bg-muted/30 border-r px-3 text-right text-xs text-muted-foreground font-mono select-none shrink-0 overflow-hidden relative"
+                  style={{
+                    width: `${String(totalLines).length * 0.6 + 1}rem`,
+                    lineHeight: '1.25rem'
+                  }}
+                >
+                  {Array.from({ length: totalLines }, (_, index) => (
+                    <div
+                      key={index + 1}
+                      className={cn(
+                        "relative leading-[1.25rem]",
+                        index + 1 === currentLine && "text-primary font-semibold"
+                      )}
+                    >
+                      {index + 1}
+                    </div>
+                  ))}
+                </div>
+                {/* Editor Content */}
+                <div className="flex-1 relative overflow-hidden">
+                  <div
+                    className="absolute left-1 right-1 bg-primary/5 pointer-events-none transition-transform duration-75 z-10 rounded"
+                    style={{
+                      height: '1.25rem',
+                      transform: `translateY(${(currentLine - 1) * 1.25 - scrollTop / 16}rem)`
+                    }}
+                  />
+                  <textarea
+                    ref={textareaRef}
+                    className="absolute inset-0 w-full h-full px-4 pl-2 py-0 font-mono text-sm resize-none bg-transparent focus:outline-none overflow-y-auto overflow-x-auto relative z-20"
+                    value={tab.content}
+                    onChange={(e) => {
+                      handleContentChange(tab.id, e.target.value);
+                      handleCursorChange(e);
+                    }}
+                    onSelect={(e) => {
+                      const target = e.target as HTMLTextAreaElement;
+                      const cursorPos = target.selectionStart;
+                      const textBeforeCursor = target.value.substring(0, cursorPos);
+                      const lineNumber = textBeforeCursor.split('\n').length;
+                      setCursorPosition(cursorPos);
+                      setCurrentLine(lineNumber);
+                    }}
+                    onKeyUp={(e) => {
+                      const target = e.target as HTMLTextAreaElement;
+                      const cursorPos = target.selectionStart;
+                      const textBeforeCursor = target.value.substring(0, cursorPos);
+                      const lineNumber = textBeforeCursor.split('\n').length;
+                      setCursorPosition(cursorPos);
+                      setCurrentLine(lineNumber);
+                    }}
+                    onClick={(e) => {
+                      const target = e.target as HTMLTextAreaElement;
+                      const cursorPos = target.selectionStart;
+                      const textBeforeCursor = target.value.substring(0, cursorPos);
+                      const lineNumber = textBeforeCursor.split('\n').length;
+                      setCursorPosition(cursorPos);
+                      setCurrentLine(lineNumber);
+                    }}
+                    onScroll={(e) => {
+                      // Sync line numbers scroll with textarea scroll and track scroll position
+                      const scrollTop = e.currentTarget.scrollTop;
+                      if (lineNumbersRef.current) {
+                        lineNumbersRef.current.scrollTop = scrollTop;
+                      }
+                      setScrollTop(scrollTop);
+                    }}
+                    spellCheck={false}
+                    style={{
+                      lineHeight: '1.25rem',
+                    }}
+                  />
+                </div>
+              </>
             )}
+          </div>
+          {/* Editor Footer */}
+          <div className="border-t px-4 py-2 flex items-center text-xs text-muted-foreground bg-muted/30">
+            <span>Line {currentLine}</span>
+            <div className="flex-1"></div>
+            <span className="flex-1 text-center">{totalLines} lines</span>
+            <div className="flex-1 flex items-center justify-end">
+              <span>{totalChars} characters</span>
+            </div>
           </div>
         </div>
       </div>
@@ -334,38 +600,77 @@ export default function FileManager() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="h-[calc(100vh-8rem)] flex flex-col gap-6 min-h-0">
       {/* Tab Bar */}
-      <div className="flex items-center gap-2 border-b pb-2">
-        <button
-          onClick={() => setActiveTab('browser')}
-          className={cn(
-            "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors",
-            activeTab === 'browser' 
-              ? "bg-primary text-primary-foreground" 
-              : "hover:bg-muted"
-          )}
-        >
-          <Folder className="h-4 w-4" />
-          Browser
-        </button>
+      <div className="flex items-center gap-1">
+         {browserTabs.map(t => {
+           const folderName = t.currentPath === '/' ? 'Files' : t.currentPath.split('/').filter(Boolean).pop() || 'Files';
+           return (
+           <button
+             key={t.id}
+             onClick={() => setActiveTab(t.id)}
+             onMouseDown={(e) => {
+               if (e.button === 1 && browserTabs.length > 1) { // Middle mouse button
+                 e.preventDefault();
+                 setBrowserTabs(prev => prev.filter(tab => tab.id !== t.id));
+                 if (activeTab === t.id) {
+                   const remaining = browserTabs.filter(tab => tab.id !== t.id);
+                   setActiveTab(remaining.length > 0 ? remaining[0].id : (openFiles.length > 0 ? openFiles[0].id : 'browser-0'));
+                 }
+               }
+             }}
+             className={cn(
+               "flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors group",
+               activeTab === t.id 
+                 ? "bg-amber-50 border-amber-200 text-foreground" 
+                 : "bg-background border-border hover:bg-muted/50"
+             )}
+           >
+             <Folder className="h-3.5 w-3.5" />
+             <span className="max-w-[150px] truncate">{folderName}</span>
+            {browserTabs.length > 1 && (
+              <div 
+                role="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setBrowserTabs(prev => prev.filter(tab => tab.id !== t.id));
+                  if (activeTab === t.id) {
+                    const remaining = browserTabs.filter(tab => tab.id !== t.id);
+                    setActiveTab(remaining.length > 0 ? remaining[0].id : (openFiles.length > 0 ? openFiles[0].id : 'browser-0'));
+                  }
+                }}
+                className="hover:bg-muted rounded p-0.5 ml-1"
+              >
+                <X className="h-3 w-3" />
+              </div>
+            )}
+          </button>
+          );
+          })}
         {openFiles.map(t => (
           <button
             key={t.id}
             onClick={() => setActiveTab(t.id)}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors group",
-              activeTab === t.id 
-                ? "bg-primary text-primary-foreground" 
-                : "hover:bg-muted"
-            )}
-          >
+            onMouseDown={(e) => {
+              if (e.button === 1) { // Middle mouse button
+                e.preventDefault();
+                handleCloseTab(t.id);
+              }
+            }}
+               className={cn(
+                 "flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors group",
+                 activeTab === t.id 
+                   ? "bg-amber-50 border-amber-200 text-foreground" 
+                   : "bg-background border-border hover:bg-muted/50"
+               )}
+             >
+               <File className="h-3.5 w-3.5" />
             <span className="max-w-[150px] truncate">{t.name}</span>
-            {t.isDirty && <span className="h-2 w-2 rounded-full bg-yellow-500" />}
+            {t.isDirty && <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" />}
             <div 
               role="button"
               onClick={(e) => handleCloseTab(t.id, e)}
-              className="opacity-0 group-hover:opacity-100 hover:bg-muted rounded-full p-0.5"
+              className="hover:bg-muted rounded p-0.5 ml-1"
             >
               <X className="h-3 w-3" />
             </div>
@@ -373,24 +678,21 @@ export default function FileManager() {
         ))}
         <button
           onClick={() => {
-            // Create a new empty file tab
-            const newTabId = `file-${Date.now()}`;
-            const newTab: EditorTab = {
+            const newTabId = `browser-${Date.now()}`;
+            const newTab: BrowserTab = {
               id: newTabId,
-              name: 'untitled',
-              path: currentPath === '/' ? '/untitled' : `${currentPath}/untitled`,
-              content: '',
-              originalContent: '',
-              isDirty: false,
-              loading: false,
+              name: 'Files',
+              currentPath: '/',
+              searchQuery: ''
             };
-            setOpenFiles([...openFiles, newTab]);
+            setBrowserTabs([...browserTabs, newTab]);
             setActiveTab(newTabId);
+            refetch();
           }}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
-          title="New Tab"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-lg bg-background hover:bg-muted/50 transition-colors"
         >
-          <Plus className="h-4 w-4" />
+          <Plus className="h-3.5 w-3.5" />
+          New Tab
         </button>
       </div>
 
@@ -398,17 +700,19 @@ export default function FileManager() {
       <div className="flex items-center gap-4">
               {/* Search - Left */}
               <div className="relative flex-1 max-w-md">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input 
-                  placeholder="Search files and folders..." 
-                  className="pl-10"
+                <Search className={`absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 transition-colors ${searchFocused ? "text-primary" : "text-muted-foreground"}`} />
+                <Input
+                  placeholder="Search files and folders..."
+                  className="pl-10 h-8 focus-visible:ring-0"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => setSearchFocused(false)}
                 />
                         </div>
 
-              {/* Buttons - Middle */}
-              <div className="flex items-center gap-2">
+              {/* Buttons - Right */}
+              <div className="flex items-center gap-2 ml-auto">
                 {showNewFolderInput ? (
                   <form onSubmit={handleCreateFolder} className="flex gap-2">
                         <Input
@@ -475,14 +779,7 @@ export default function FileManager() {
                 )}
               </div>
 
-        {/* Storage - Right */}
-        <div className="px-3 py-1.5 rounded-lg border shrink-0">
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground">Storage:</span>
-            <span className="font-medium">{formatBytes(site?.disk_usage || 0)}</span>
-          </div>
         </div>
-      </div>
 
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm">
@@ -520,8 +817,8 @@ export default function FileManager() {
       </div>
 
       {/* File List */}
-      <div className="border rounded-lg overflow-hidden">
-        <div className="h-[65vh] overflow-y-auto">
+      <div className="border rounded-lg overflow-hidden flex-shrink-0" style={{ height: '60vh' }}>
+        <div className="h-full overflow-y-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted text-left border-b sticky top-0 z-10">
               <tr>
@@ -555,10 +852,11 @@ export default function FileManager() {
                     )}
                     
                     {filteredFiles.map((file) => (
-                      <tr 
-                        key={file.path} 
+                      <tr
+                        key={file.path}
                         className="hover:bg-muted/50 cursor-pointer"
                         onClick={() => handleOpenFile(file)}
+                        onContextMenu={(e) => handleContextMenu(e, file)}
                       >
                         <td className="p-3" onClick={(e) => e.stopPropagation()}>
                           <input type="checkbox" className="rounded" />
@@ -590,6 +888,77 @@ export default function FileManager() {
           </table>
         </div>
       </div>
+
+      {/* Context Menu */}
+      {contextMenu.file && (
+        <div
+          ref={contextMenuRef}
+          className="fixed bg-background border rounded-lg shadow-lg py-1 z-50 min-w-[180px]"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+        >
+          <button
+            onClick={() => {
+              if (contextMenu.file) handleOpenFile(contextMenu.file);
+              setContextMenu({ x: 0, y: 0, file: null });
+            }}
+            className="w-full px-4 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+          >
+            {contextMenu.file.type === 'dir' ? <Folder className="h-4 w-4" /> : <File className="h-4 w-4" />}
+            Open
+          </button>
+          
+          {contextMenu.file.type === 'file' && (
+            <button
+              onClick={() => {
+                if (contextMenu.file) handleOpenFile(contextMenu.file);
+                setContextMenu({ x: 0, y: 0, file: null });
+              }}
+              className="w-full px-4 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+            >
+              <FileCode className="h-4 w-4" />
+              Edit
+            </button>
+          )}
+          
+          <button
+            onClick={() => {
+              if (contextMenu.file) handleOpenInNewTab(contextMenu.file);
+            }}
+            className="w-full px-4 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+          >
+            <Plus className="h-4 w-4" />
+            Open in New Tab
+          </button>
+          
+          <button
+            onClick={() => {
+              if (contextMenu.file) {
+                handleDownloadFile.mutate(contextMenu.file.path);
+              }
+              setContextMenu({ x: 0, y: 0, file: null });
+            }}
+            className="w-full px-4 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+          >
+            <Download className="h-4 w-4" />
+            Download
+          </button>
+          
+          <div className="border-t my-1"></div>
+          
+          <button
+            onClick={() => {
+              if (contextMenu.file) {
+                handleDelete(contextMenu.file.path);
+                setContextMenu({ x: 0, y: 0, file: null });
+              }
+            }}
+            className="w-full px-4 py-2 text-left text-sm hover:bg-destructive/10 text-destructive transition-colors flex items-center gap-2"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete
+          </button>
+        </div>
+      )}
     </div>
   );
 }

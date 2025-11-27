@@ -1,5 +1,7 @@
 export interface Service {
   name: string;
+  display_name?: string;
+  description?: string;
   active: boolean;
   enabled: boolean;
   status: 'running' | 'stopped';

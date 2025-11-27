@@ -22,11 +22,28 @@ export default function Services() {
   };
 
   const servicesArray = Array.isArray(services) ? services : [];
-  const runningCount = servicesArray.filter(s => s.status === 'running').length;
-  const totalCount = servicesArray.length;
 
   return (
     <div className="space-y-6">
+      {error && (
+        <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-5 w-5 text-destructive" />
+            <p className="text-sm text-destructive">
+              Error loading services: {error instanceof Error ? error.message : 'Unknown error'}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            className="gap-2"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Retry
+          </Button>
+        </div>
+      )}
 
       {/* Services Grid */}
       {servicesArray.length > 0 ? (
@@ -39,12 +56,12 @@ export default function Services() {
             />
           ))}
         </div>
-      ) : (
+      ) : !error ? (
         <div className="text-center py-12">
           <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
           <p className="text-muted-foreground">No services available</p>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

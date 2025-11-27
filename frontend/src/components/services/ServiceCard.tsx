@@ -1,5 +1,4 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Play, Square, RotateCw, Power, Loader2 } from 'lucide-react';
 import type { Service, ServiceAction } from '@/types';
@@ -27,22 +26,16 @@ export function ServiceCard({ service, onAction }: ServiceCardProps) {
   return (
     <Card className="h-full transition-shadow hover:shadow-lg">
       <CardHeader className="space-y-2">
-        <div className="flex items-start justify-between gap-3">
-          <div className="space-y-1">
-            <CardTitle className="text-lg font-semibold">{service.display_name}</CardTitle>
-            <p className="text-sm text-muted-foreground">{service.name}</p>
-          </div>
-          <Badge
-            variant={isRunning ? 'default' : 'destructive'}
-            className="flex items-center gap-1.5 shrink-0"
-          >
+        <div className="space-y-1">
+          <CardTitle className="text-lg font-semibold flex items-center gap-2">
+            {service.display_name}
             <div
-              className={`h-2 w-2 rounded-full ${
+              className={`h-2 w-2 rounded-full shrink-0 ${
                 isRunning ? 'bg-green-500 animate-pulse' : 'bg-red-500'
               }`}
             />
-            {service.status}
-          </Badge>
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">{service.name}</p>
         </div>
       </CardHeader>
       

@@ -65,3 +65,81 @@ export const useChangeDomain = (domain: string) => {
     },
   });
 };
+
+export interface WordPressPlugin {
+  name: string;
+  status: string;
+  update: string;
+  version: string;
+  title: string;
+  author?: string;
+}
+
+export interface WordPressTheme {
+  name: string;
+  status: string;
+  update: string;
+  version: string;
+  title: string;
+  author?: string;
+}
+
+export const useWordPressPlugins = (domain: string) => {
+  const queryClient = useQueryClient();
+  
+  const query = useQuery({
+    queryKey: ['wordpress-plugins', domain],
+    queryFn: async () => {
+      try {
+        const response = await apiClient.get<WordPressPlugin[] | { error: string }>(API_ENDPOINTS.SITES.WORDPRESS_PLUGINS(domain));
+        if (response.data && 'error' in response.data) {
+          throw new Error(response.data.error);
+        }
+        return response.data as WordPressPlugin[];
+      } catch (error: any) {
+        console.error('Error fetching plugins:', error);
+        // Return error object so UI can display it
+        return { error: error.response?.data?.error || error.message || 'Failed to load plugins' } as any;
+      }
+    },
+    enabled: !!domain,
+    retry: false,
+  });
+
+  const togglePlugin = useMutation({
+    mutationFn: async ({ plugin, action }: { plugin: string; action: 'activate' | 'deactivate' }) => {
+      const { data } = await apiClient.post(API_ENDPOINTS.SITES.WORDPRESS_PLUGIN_ACTION(domain, plugin, action));
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['wordpress-plugins', domain] });
+    },
+  });
+
+  return { ...query, togglePlugin };
+};
+
+export const useWordPressThemes = (domain: string) => {
+  const queryClient = useQueryClient();
+  
+  const query = useQuery({
+    queryKey: ['wordpress-themes', domain],
+    queryFn: async () => {
+      const { data } = await apiClient.get<WordPressTheme[]>(API_ENDPOINTS.SITES.WORDPRESS_THEMES(domain));
+      return data;
+    },
+    enabled: !!domain,
+  });
+
+  const activateTheme = useMutation({
+    mutationFn: async (theme: string) => {
+      const { data } = await apiClient.post(API_ENDPOINTS.SITES.WORDPRESS_THEME_ACTIVATE(domain, theme));
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['wordpress-themes', domain] });
+    },
+  });
+
+  return { ...query, activateTheme };
+};
