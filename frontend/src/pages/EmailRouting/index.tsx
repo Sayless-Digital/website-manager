@@ -1,31 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
-import {
-  Mail, Plus, Trash2, RefreshCw, ArrowLeft, Send, X,
-  Settings, Search, Globe, CheckCircle2, Circle
-} from 'lucide-react';
-import {
-  useCloudflareZones,
-  useEmailRoutingStatus,
-  useEnableEmailRouting,
-  useEmailAddresses,
-  useCreateEmailAddress,
-  useDeleteEmailAddress,
-  type CloudflareZone,
-  type EmailAddress,
-} from '@/features/cloudflare/hooks/useCloudflare';
-import {
-  useEmailConfig,
-  useSetEmailConfig,
-  useSendEmail,
-} from '@/features/email/hooks/useEmail';
-import { showNotification } from '@/lib/notifications';
-import { cn } from '@/lib/utils/cn';
 import {
   Select,
   SelectContent,
@@ -34,735 +11,884 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  useQueryClient,
-} from '@tanstack/react-query';
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs';
+import {
+  RefreshCw,
+  Server,
+  Inbox,
+  Share2,
+  Plus,
+  Trash2,
+  Settings2,
+  ShieldCheck,
+} from 'lucide-react';
+import { showNotification } from '@/lib/notifications';
+import {
+  useMailDomains,
+  useCreateMailDomain,
+  useDeleteMailDomain,
+  useMailboxes,
+  useCreateMailbox,
+  useDeleteMailbox,
+  useMailAliases,
+  useCreateMailAlias,
+  useDeleteMailAlias,
+  useMailConfigs,
+  useSyncMailConfigs,
+  type MailDomain,
+  useMailDomainDns,
+  useMailboxMessages,
+  useMailboxMessage,
+} from '@/features/mail/hooks/useMail';
+import { CloudflareImportDialog } from '@/features/mail/components/CloudflareImportDialog';
+import { useSendEmail } from '@/features/email/hooks/useEmail';
+
+type TabValue = 'domains' | 'mailboxes' | 'aliases' | 'settings';
 
 export default function EmailRoutingManager() {
-  const { zoneId } = useParams<{ zoneId?: string }>();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState('addresses');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedZoneId, setSelectedZoneId] = useState<string>('');
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [showSettingsDialog, setShowSettingsDialog] = useState(false);
-  const [showSendEmailDialog, setShowSendEmailDialog] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<EmailAddress | null>(null);
+const [activeTab, setActiveTab] = useState<TabValue>('domains');
+  const [selectedDomainId, setSelectedDomainId] = useState<number | null>(null);
+const [clientMailboxId, setClientMailboxId] = useState<number | null>(null);
+const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 
-  // Hooks
-  const { data: zones, refetch: refetchZones, isLoading: zonesLoading } = useCloudflareZones();
-  const selectedZone = zones?.find(z => z.id === selectedZoneId) || zones?.[0];
-  
-  const { data: emailRoutingStatus, refetch: refetchEmailRouting } = useEmailRoutingStatus(selectedZone?.id || '');
-  const enableEmailRouting = useEnableEmailRouting();
-  const { data: emailAddresses, refetch: refetchEmailAddresses } = useEmailAddresses(
-    selectedZone?.id,
-    selectedZone?.account_id
-  );
-  const createEmailAddress = useCreateEmailAddress();
-  const deleteEmailAddress = useDeleteEmailAddress();
-  
-  const { data: emailConfig, refetch: refetchEmailConfig } = useEmailConfig();
-  const setEmailConfig = useSetEmailConfig();
-  const sendEmail = useSendEmail();
+  const { data: domains, isLoading: domainsLoading } = useMailDomains();
+  const { data: configPreview } = useMailConfigs();
 
-  // Forms
-  const [emailForm, setEmailForm] = useState({
-    emailPrefix: '',
-    destination: '',
-  });
-  const [emailConfigForm, setEmailConfigForm] = useState({
-    hostname: '',
-    domain: '',
-    relay_host: '',
-    relay_username: '',
-    relay_password: '',
-    from_email: '',
-  });
-  const [sendEmailForm, setSendEmailForm] = useState({
-    to: '',
-    from: '',
-    from_name: '',
-    subject: '',
-    body: '',
-  });
+  const mailboxesQuery = useMailboxes(selectedDomainId ?? undefined);
+  const aliasesQuery = useMailAliases(selectedDomainId ?? undefined);
 
-  // Set initial zone
+  const createDomain = useCreateMailDomain();
+  const deleteDomain = useDeleteMailDomain();
+  const createMailbox = useCreateMailbox();
+  const deleteMailbox = useDeleteMailbox();
+  const createAlias = useCreateMailAlias();
+  const deleteAlias = useDeleteMailAlias();
+  const syncConfigs = useSyncMailConfigs();
+
+  const [domainForm, setDomainForm] = useState({ name: '', display_name: '', auto_dns_enabled: true });
+  const [mailboxForm, setMailboxForm] = useState({ local_part: '', password: '', quota_mb: 512 });
+  const [aliasForm, setAliasForm] = useState({ local_part: '', destinations: '' });
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+const sendEmailMutation = useSendEmail();
+const [composeForm, setComposeForm] = useState({
+  from: '',
+  to: '',
+  subject: 'Test message',
+  body: 'This is a test email.',
+});
+const messagesQuery = useMailboxMessages(clientMailboxId ?? undefined);
+const messageDetailQuery = useMailboxMessage(clientMailboxId ?? undefined, selectedMessageId ?? undefined);
+
   useEffect(() => {
-    if (zoneId && zones) {
-      setSelectedZoneId(zoneId);
-    } else if (zones && zones.length > 0 && !selectedZoneId) {
-      setSelectedZoneId(zones[0].id);
+    if (domains && domains.length > 0) {
+      if (!selectedDomainId || !domains.some((d) => d.id === selectedDomainId)) {
+        setSelectedDomainId(domains[0].id);
+      }
+    } else {
+      setSelectedDomainId(null);
     }
-  }, [zoneId, zones, selectedZoneId]);
+  }, [domains, selectedDomainId]);
 
-  // Stats
-  const stats = useMemo(() => {
-    return {
-      totalAddresses: emailAddresses?.length || 0,
-      routingEnabled: emailRoutingStatus?.enabled || false,
-      sendingConfigured: emailConfig?.configured || false,
-    };
-  }, [emailAddresses, emailRoutingStatus, emailConfig]);
+  const selectedDomain = domains?.find((d) => d.id === selectedDomainId) ?? null;
+  const mailboxes = mailboxesQuery.data ?? [];
+  const clientMailbox = mailboxes.find((mb) => mb.id === clientMailboxId) ?? mailboxes[0];
+  const aliases = aliasesQuery.data ?? [];
+  const dnsQuery = useMailDomainDns(selectedDomain?.id);
+  const dnsRecords = dnsQuery.data;
 
-  // Filter email addresses
-  const filteredAddresses = useMemo(() => {
-    if (!emailAddresses) return [];
-    if (!searchQuery) return emailAddresses;
-    const query = searchQuery.toLowerCase();
-    return emailAddresses.filter(addr => 
-      addr.email.toLowerCase().includes(query) ||
-      addr.destination?.toLowerCase().includes(query)
-    );
-  }, [emailAddresses, searchQuery]);
+const stats = useMemo(() => ({
+    domains: domains?.length ?? 0,
+    mailboxes: mailboxes?.length ?? 0,
+    aliases: aliases?.length ?? 0,
+  }), [domains, mailboxes, aliases]);
 
-  // Handlers
-  const handleEnableEmailRouting = async () => {
-    if (!selectedZone) return;
-    try {
-      await enableEmailRouting.mutateAsync(selectedZone.id);
-      showNotification('success', 'Email routing enabled');
-      refetchEmailRouting();
-    } catch (error: any) {
-      showNotification('error', error.response?.data?.error || 'Failed to enable email routing');
-    }
-  };
-
-  const handleCreateEmail = async (e: React.FormEvent) => {
+  const handleCreateDomain = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedZone) return;
-    if (!selectedZone.account_id) {
-      showNotification('error', 'Selected zone is missing a Cloudflare account ID');
+    if (!domainForm.name) {
+      showNotification('error', 'Domain name is required');
       return;
     }
     try {
-      const email = `${emailForm.emailPrefix}@${selectedZone.name}`;
-      await createEmailAddress.mutateAsync({
-        zoneId: selectedZone.id,
-        accountId: selectedZone.account_id,
-        email,
-        destination: emailForm.destination,
+      await createDomain.mutateAsync({
+        name: domainForm.name,
+        display_name: domainForm.display_name || domainForm.name,
+        auto_dns_enabled: domainForm.auto_dns_enabled,
       });
-      showNotification('success', 'Email address created');
-      setShowCreateDialog(false);
-      setEmailForm({ emailPrefix: '', destination: '' });
-      refetchEmailAddresses();
+      showNotification('success', 'Domain added');
+      setDomainForm({ name: '', display_name: '', auto_dns_enabled: true });
     } catch (error: any) {
-      showNotification('error', error.response?.data?.error || 'Failed to create email address');
+      showNotification('error', error.response?.data?.error || 'Failed to add domain');
     }
   };
 
-  const handleDeleteEmail = async () => {
-    if (!deleteConfirm || !selectedZone) return;
-    if (!selectedZone.account_id) {
-      showNotification('error', 'Selected zone is missing a Cloudflare account ID');
+  const handleDeleteDomain = async (domain: MailDomain) => {
+    if (!window.confirm(`Remove ${domain.name}? This deletes mailboxes and aliases.`)) return;
+    try {
+      await deleteDomain.mutateAsync(domain.id);
+      showNotification('success', 'Domain removed');
+    } catch (error: any) {
+      showNotification('error', error.response?.data?.error || 'Failed to delete domain');
+    }
+  };
+
+  const handleCreateMailbox = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedDomain) {
+      showNotification('error', 'Select a domain first');
+      return;
+    }
+    if (!mailboxForm.local_part || !mailboxForm.password) {
+      showNotification('error', 'Mailbox and password are required');
       return;
     }
     try {
-      await deleteEmailAddress.mutateAsync({
-        zoneId: selectedZone.id,
-        accountId: selectedZone.account_id,
-        tag: deleteConfirm.tag,
+      await createMailbox.mutateAsync({
+        domain_id: selectedDomain.id,
+        local_part: mailboxForm.local_part,
+        password: mailboxForm.password,
+        quota_mb: Number(mailboxForm.quota_mb) || 512,
       });
-      showNotification('success', 'Email address deleted');
-      setDeleteConfirm(null);
-      refetchEmailAddresses();
+      showNotification('success', 'Mailbox created');
+      setMailboxForm({ local_part: '', password: '', quota_mb: mailboxForm.quota_mb });
     } catch (error: any) {
-      showNotification('error', error.response?.data?.error || 'Failed to delete email address');
+      showNotification('error', error.response?.data?.error || 'Failed to create mailbox');
     }
   };
 
-  const handleSaveEmailConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleDeleteMailbox = async (mailboxId: number) => {
+    if (!window.confirm('Delete this mailbox?')) return;
     try {
-      await setEmailConfig.mutateAsync(emailConfigForm);
-      showNotification('success', 'Email configuration saved');
-      setShowSettingsDialog(false);
-      refetchEmailConfig();
+      await deleteMailbox.mutateAsync(mailboxId);
+      showNotification('success', 'Mailbox removed');
     } catch (error: any) {
-      showNotification('error', error.response?.data?.error || 'Failed to save configuration');
+      showNotification('error', error.response?.data?.error || 'Failed to delete mailbox');
     }
   };
 
-  const handleSendEmail = async (e: React.FormEvent) => {
+  const handleCreateAlias = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!selectedDomain) {
+      showNotification('error', 'Select a domain first');
+      return;
+    }
+    const destinations = aliasForm.destinations
+      .split(',')
+      .map((d) => d.trim())
+      .filter(Boolean);
+    if (!aliasForm.local_part || destinations.length === 0) {
+      showNotification('error', 'Alias and at least one destination are required');
+      return;
+    }
     try {
-      await sendEmail.mutateAsync(sendEmailForm);
-      showNotification('success', 'Email sent successfully');
-      setShowSendEmailDialog(false);
-      setSendEmailForm({
-        to: '',
-        from: sendEmailForm.from,
+      await createAlias.mutateAsync({
+        domain_id: selectedDomain.id,
+        local_part: aliasForm.local_part,
+        destinations,
+      });
+      showNotification('success', 'Alias created');
+      setAliasForm({ local_part: '', destinations: '' });
+    } catch (error: any) {
+      showNotification('error', error.response?.data?.error || 'Failed to create alias');
+    }
+  };
+
+  const handleDeleteAlias = async (aliasId: number) => {
+    if (!window.confirm('Delete this alias?')) return;
+    try {
+      await deleteAlias.mutateAsync(aliasId);
+      showNotification('success', 'Alias removed');
+    } catch (error: any) {
+      showNotification('error', error.response?.data?.error || 'Failed to delete alias');
+    }
+  };
+
+  const handleSyncConfigs = async () => {
+    try {
+      await syncConfigs.mutateAsync();
+      showNotification('success', 'Mail services reloaded');
+    } catch (error: any) {
+      showNotification('error', error.response?.data?.error || 'Failed to sync configs');
+    }
+  };
+
+useEffect(() => {
+    if (clientMailbox && clientMailboxId !== clientMailbox.id) {
+      setClientMailboxId(clientMailbox.id);
+      setComposeForm((prev) => ({ ...prev, from: clientMailbox.email }));
+    } else if (!clientMailbox && mailboxes.length > 0 && !clientMailboxId) {
+      setClientMailboxId(mailboxes[0].id);
+      setComposeForm((prev) => ({ ...prev, from: mailboxes[0].email }));
+    }
+  }, [clientMailboxId, clientMailbox, mailboxes]);
+
+ const handleSendTestEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!composeForm.to || !composeForm.from || !composeForm.subject || !composeForm.body) {
+      showNotification('error', 'All fields are required');
+      return;
+    }
+    try {
+      await sendEmailMutation.mutateAsync({
+        to: composeForm.to,
+        from: composeForm.from,
         from_name: '',
-        subject: '',
-        body: '',
+        subject: composeForm.subject,
+        body: composeForm.body,
       });
+      showNotification('success', 'Test email sent');
+      setComposeForm((prev) => ({ ...prev, to: '', subject: prev.subject, body: prev.body }));
     } catch (error: any) {
       showNotification('error', error.response?.data?.error || 'Failed to send email');
     }
   };
 
-  const handleRefresh = () => {
-    refetchZones();
-    if (selectedZone) {
-      refetchEmailRouting();
-      refetchEmailAddresses();
-    }
-    refetchEmailConfig();
-  };
-
-  // Loading state
-  if (zonesLoading) {
+  if (domainsLoading) {
     return (
       <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
         <div className="text-center">
           <RefreshCw className="h-12 w-12 mx-auto mb-4 text-muted-foreground animate-spin" />
-          <p className="text-muted-foreground">Loading zones...</p>
+          <p className="text-muted-foreground">Loading mail domains...</p>
         </div>
       </div>
     );
   }
 
-  // No zones state
-  if (!zones || zones.length === 0) {
-    return (
-      <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center py-8">
-              <Mail className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-              <p className="text-muted-foreground mb-4">
-                No Cloudflare zones found. Please configure Cloudflare first.
-              </p>
-              <Button onClick={() => refetchZones()}>
-                <RefreshCw className="h-4 w-4 mr-2" />
-                Load Zones
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  // Main interface
   return (
-    <div className="h-[calc(100vh-8rem)] flex flex-col gap-6 min-h-0">
-      {/* Overview Cards */}
-      <div className="grid grid-cols-3 gap-4 flex-shrink-0">
+    <div className="h-[calc(100vh-8rem)] flex flex-col gap-6">
+      <div className="grid grid-cols-4 gap-4">
         <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-primary/10">
-                <Mail className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Total Addresses</p>
-                <p className="text-lg font-semibold">{stats.totalAddresses}</p>
-              </div>
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <Server className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Domains</p>
+              <p className="text-lg font-semibold">{stats.domains}</p>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-green-500/10">
-                <CheckCircle2 className="h-5 w-5 text-green-500" />
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Receiving</p>
-                <p className="text-lg font-semibold">
-                  {stats.routingEnabled ? 'Enabled' : 'Disabled'}
-                </p>
-              </div>
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-green-500/10">
+              <Inbox className="h-5 w-5 text-green-500" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Mailboxes</p>
+              <p className="text-lg font-semibold">{stats.mailboxes}</p>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-blue-500/10">
-                <Send className="h-5 w-5 text-blue-500" />
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Sending</p>
-                <p className="text-lg font-semibold">
-                  {stats.sendingConfigured ? 'Configured' : 'Not Configured'}
-                </p>
-              </div>
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-blue-500/10">
+              <Share2 className="h-5 w-5 text-blue-500" />
             </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Aliases</p>
+              <p className="text-lg font-semibold">{stats.aliases}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex items-center justify-between">
+            <div>
+              <p className="text-xs text-muted-foreground">Config Status</p>
+              <p className="text-lg font-semibold">{configPreview?.stats.mailboxes ?? 0} mailboxes synced</p>
+            </div>
+            <ShieldCheck className="h-5 w-5 text-emerald-500" />
           </CardContent>
         </Card>
       </div>
 
-      {/* Tab Bar */}
-      <div className="flex items-center gap-1 flex-shrink-0">
-        <button
-          onClick={() => setActiveTab('addresses')}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors",
-            activeTab === 'addresses'
-              ? "bg-amber-50 border-amber-200 text-foreground"
-              : "bg-background border-border hover:bg-muted/50"
-          )}
-        >
-          <Mail className="h-3.5 w-3.5" />
-          <span>Email Addresses</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('settings')}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors",
-            activeTab === 'settings'
-              ? "bg-amber-50 border-amber-200 text-foreground"
-              : "bg-background border-border hover:bg-muted/50"
-          )}
-        >
-          <Settings className="h-3.5 w-3.5" />
-          <span>Settings</span>
-        </button>
-      </div>
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as TabValue)} className="flex-1 flex flex-col">
+      <TabsList className="w-full justify-start gap-2">
+          <TabsTrigger value="domains">Domains</TabsTrigger>
+          <TabsTrigger value="mailboxes" disabled={!selectedDomain}>
+            Mailboxes
+          </TabsTrigger>
+          <TabsTrigger value="aliases" disabled={!selectedDomain}>
+            Aliases
+          </TabsTrigger>
+          <TabsTrigger value="settings">Config & Reload</TabsTrigger>
+        <TabsTrigger value="client" disabled={!clientMailbox}>
+          Mail Client
+        </TabsTrigger>
+        </TabsList>
 
-      {/* Search and Actions Bar */}
-      {activeTab === 'addresses' && (
-        <div className="flex items-center gap-4 flex-shrink-0">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search email addresses..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={handleRefresh}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
-            {zones && zones.length > 0 && (
-              <Select
-                value={selectedZoneId}
-                onValueChange={setSelectedZoneId}
-              >
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder="Select zone" />
-                </SelectTrigger>
-                <SelectContent>
-                  {zones.map((zone) => (
-                    <SelectItem key={zone.id} value={zone.id}>
-                      <div className="flex items-center gap-2">
-                        <Globe className="h-4 w-4" />
-                        <span>{zone.name}</span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {selectedZone && (
-              <Button size="sm" onClick={() => setShowCreateDialog(true)}>
-                <Plus className="h-4 w-4 mr-2" />
-                New Email Address
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Email Addresses Tab */}
-      {activeTab === 'addresses' && (
-        <div className="border rounded-lg overflow-hidden min-h-[52vh] h-[52vh] flex-shrink-0">
-          {!selectedZone ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <Globe className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                <p className="text-muted-foreground mb-4">Please select a zone</p>
-              </div>
-            </div>
-          ) : filteredAddresses.length > 0 ? (
-            <div className="overflow-auto h-full overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-muted sticky top-0">
-                  <tr>
-                    <th className="text-left p-3 text-sm font-medium w-1/3">Email</th>
-                    <th className="text-left p-3 text-sm font-medium w-1/3">Forward To</th>
-                    <th className="text-right p-3 text-sm font-medium w-1/3">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredAddresses.map((addr) => (
-                    <tr key={addr.tag} className="border-t hover:bg-muted/30">
-                      <td className="p-3 font-medium">{addr.email}</td>
-                      <td className="p-3 text-sm text-muted-foreground">
-                        {addr.destination || '-'}
-                      </td>
-                      <td className="p-3 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              setSendEmailForm({ ...sendEmailForm, from: addr.email });
-                              setShowSendEmailDialog(true);
-                            }}
-                          >
-                            <Send className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setDeleteConfirm(addr)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <Mail className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                <p className="text-muted-foreground mb-4">
-                  {searchQuery ? 'No email addresses found matching your search' : 'No email addresses configured'}
-                </p>
-                {!searchQuery && (
-                  <Button onClick={() => setShowCreateDialog(true)}>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Create Email Address
-                  </Button>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Settings Tab */}
-      {activeTab === 'settings' && (
-        <div className="flex-1 min-h-0 overflow-auto">
-          <div className="space-y-6">
-            {/* Receiving Configuration */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Receiving Configuration (Cloudflare)</CardTitle>
+        <TabsContent value="domains" className="flex-1 mt-4 flex flex-col gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1">
+            <Card className="lg:col-span-2 h-full">
+              <CardHeader className="flex items-center justify-between">
+                <CardTitle>Managed Domains</CardTitle>
+                <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)}>
+                  Import from Cloudflare
+                </Button>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div>
-                    <p className="text-sm font-medium">Email Routing Status</p>
-                    <p className="text-xs text-muted-foreground">
-                      Enable receiving emails via Cloudflare Email Routing
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Badge variant={emailRoutingStatus?.enabled ? 'default' : 'secondary'}>
-                      {emailRoutingStatus?.enabled ? 'Enabled' : 'Disabled'}
-                    </Badge>
-                    {!emailRoutingStatus?.enabled && selectedZone && (
-                      <Button onClick={handleEnableEmailRouting} size="sm">
-                        Enable
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                {selectedZone && (
-                  <div className="p-3 bg-muted/50 rounded-lg">
-                    <p className="text-sm">
-                      <span className="font-medium">Zone:</span> {selectedZone.name}
-                    </p>
-                  </div>
+              <CardContent className="overflow-auto max-h-[480px]">
+                {domains && domains.length > 0 ? (
+                  <table className="w-full text-sm">
+                    <thead className="text-muted-foreground">
+                      <tr>
+                        <th className="text-left pb-2">Domain</th>
+                        <th className="text-left pb-2">MX Host</th>
+                        <th className="text-left pb-2">Mailboxes</th>
+                        <th className="text-left pb-2">Aliases</th>
+                        <th className="text-right pb-2">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {domains.map((domain) => (
+                        <tr key={domain.id} className="border-t border-border/60">
+                          <td className="py-2">
+                            <div className="font-medium">{domain.name}</div>
+                            <Badge variant={domain.active ? 'default' : 'secondary'}>
+                              {domain.active ? 'Active' : 'Disabled'}
+                            </Badge>
+                          </td>
+                          <td className="py-2">{domain.mx_hostname || `mail.${domain.name}`}</td>
+                          <td className="py-2">{domain.mailbox_count ?? 0}</td>
+                          <td className="py-2">{domain.alias_count ?? 0}</td>
+                          <td className="py-2 text-right">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => setSelectedDomainId(domain.id)}
+                              className="mr-2"
+                            >
+                              <Settings2 className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => handleDeleteDomain(domain)}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="text-muted-foreground text-sm">No domains yet. Add one using the form.</p>
                 )}
               </CardContent>
             </Card>
-
-            {/* Sending Configuration */}
             <Card>
               <CardHeader>
-                <CardTitle>Sending Configuration (Local Server)</CardTitle>
+                <CardTitle>Add Domain</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div>
-                    <p className="text-sm font-medium">Sending Server Status</p>
-                    <p className="text-xs text-muted-foreground">
-                      Configure SMTP relay for sending emails
-                    </p>
-                  </div>
-                  <Badge variant={emailConfig?.configured ? 'default' : 'secondary'}>
-                    {emailConfig?.configured ? 'Configured' : 'Not Configured'}
-                  </Badge>
-                </div>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    if (emailConfig) {
-                      setEmailConfigForm({
-                        hostname: emailConfig.hostname || '',
-                        domain: emailConfig.domain || '',
-                        relay_host: emailConfig.relayhost || '',
-                        relay_username: emailConfig.relay_username || '',
-                        relay_password: '',
-                        from_email: emailConfig.from_email || '',
-                      });
-                    }
-                    setShowSettingsDialog(true);
-                  }}
-                >
-                  Configure Sending
-                </Button>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      )}
-
-      {/* Create Email Dialog */}
-      {showCreateDialog && selectedZone && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="w-full max-w-md">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Create Email Address</CardTitle>
-                <Button variant="ghost" size="sm" onClick={() => setShowCreateDialog(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleCreateEmail} className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Email Prefix *</label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      placeholder="contact"
-                      value={emailForm.emailPrefix}
-                      onChange={(e) => setEmailForm({ ...emailForm, emailPrefix: e.target.value })}
-                      required
-                    />
-                    <span className="text-muted-foreground">@{selectedZone.name}</span>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Forward To *</label>
-                  <Input
-                    type="email"
-                    placeholder="your@email.com"
-                    value={emailForm.destination}
-                    onChange={(e) => setEmailForm({ ...emailForm, destination: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="flex gap-2">
-                  <Button type="submit" disabled={createEmailAddress.isPending} className="flex-1">
-                    {createEmailAddress.isPending ? 'Creating...' : 'Create'}
-                  </Button>
-                  <Button type="button" variant="outline" onClick={() => setShowCreateDialog(false)}>
-                    Cancel
-                  </Button>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* Delete Confirmation Dialog */}
-      {deleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="w-full max-w-md">
-            <CardHeader>
-              <CardTitle>Delete Email Address</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p>Are you sure you want to delete {deleteConfirm.email}?</p>
-              <div className="flex gap-2">
-                <Button variant="destructive" onClick={handleDeleteEmail} className="flex-1">
-                  Delete
-                </Button>
-                <Button variant="outline" onClick={() => setDeleteConfirm(null)}>
-                  Cancel
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* Settings Dialog */}
-      {showSettingsDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
-            <CardHeader className="flex-shrink-0">
-              <div className="flex items-center justify-between">
-                <CardTitle>Email Sending Configuration</CardTitle>
-                <Button variant="ghost" size="sm" onClick={() => setShowSettingsDialog(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 min-h-0 overflow-y-auto space-y-4">
-              <form onSubmit={handleSaveEmailConfig} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Hostname *</label>
-                    <Input
-                      placeholder="mail.example.com"
-                      value={emailConfigForm.hostname}
-                      onChange={(e) => setEmailConfigForm({ ...emailConfigForm, hostname: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Domain *</label>
+              <CardContent>
+                <form className="space-y-3" onSubmit={handleCreateDomain}>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Domain Name</label>
                     <Input
                       placeholder="example.com"
-                      value={emailConfigForm.domain}
-                      onChange={(e) => setEmailConfigForm({ ...emailConfigForm, domain: e.target.value })}
+                      value={domainForm.name}
+                      onChange={(e) => setDomainForm({ ...domainForm, name: e.target.value })}
                       required
                     />
                   </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Relay Host</label>
-                  <Input
-                    placeholder="smtp.example.com"
-                    value={emailConfigForm.relay_host}
-                    onChange={(e) => setEmailConfigForm({ ...emailConfigForm, relay_host: e.target.value })}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Relay Username</label>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Display Name</label>
                     <Input
-                      placeholder="username"
-                      value={emailConfigForm.relay_username}
-                      onChange={(e) => setEmailConfigForm({ ...emailConfigForm, relay_username: e.target.value })}
+                      placeholder="Marketing"
+                      value={domainForm.display_name}
+                      onChange={(e) => setDomainForm({ ...domainForm, display_name: e.target.value })}
                     />
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Relay Password</label>
-                    <Input
-                      type="password"
-                      placeholder="password"
-                      value={emailConfigForm.relay_password}
-                      onChange={(e) => setEmailConfigForm({ ...emailConfigForm, relay_password: e.target.value })}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={domainForm.auto_dns_enabled}
+                      onChange={(e) => setDomainForm({ ...domainForm, auto_dns_enabled: e.target.checked })}
+                      className="rounded border border-border"
                     />
+                    <span className="text-sm">Automatically publish MX/SPF/DKIM/DMARC via Cloudflare</span>
                   </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">From Email</label>
-                  <Input
-                    type="email"
-                    placeholder="noreply@example.com"
-                    value={emailConfigForm.from_email}
-                    onChange={(e) => setEmailConfigForm({ ...emailConfigForm, from_email: e.target.value })}
-                  />
-                </div>
-                <div className="flex gap-2 pt-4">
-                  <Button type="submit" disabled={setEmailConfig.isPending} className="flex-1">
-                    {setEmailConfig.isPending ? 'Saving...' : 'Save Configuration'}
+                  <Button type="submit" className="w-full" disabled={createDomain.isPending}>
+                    {createDomain.isPending ? 'Saving...' : 'Add Domain'}
                   </Button>
-                  <Button type="button" variant="outline" onClick={() => setShowSettingsDialog(false)}>
-                    Cancel
-                  </Button>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+                </form>
+              </CardContent>
+            </Card>
+          </div>
+          <CloudflareImportDialog open={importDialogOpen} onClose={() => setImportDialogOpen(false)} />
+        </TabsContent>
 
-      {/* Send Email Dialog */}
-      {showSendEmailDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
-            <CardHeader className="flex-shrink-0">
-              <div className="flex items-center justify-between">
-                <CardTitle>Send Email</CardTitle>
-                <Button variant="ghost" size="sm" onClick={() => setShowSendEmailDialog(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 min-h-0 overflow-y-auto space-y-4">
-              <form onSubmit={handleSendEmail} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">To *</label>
-                    <Input
-                      type="email"
-                      placeholder="recipient@example.com"
-                      value={sendEmailForm.to}
-                      onChange={(e) => setSendEmailForm({ ...sendEmailForm, to: e.target.value })}
-                      required
-                    />
+        <TabsContent value="mailboxes" className="flex-1 mt-4">
+          {!selectedDomain ? (
+            <div className="border rounded-lg p-6 text-center text-muted-foreground">
+              Add a domain first to manage mailboxes.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-full">
+              <Card className="lg:col-span-2">
+                <CardHeader className="flex items-center justify-between">
+                  <CardTitle>Mailboxes for {selectedDomain.name}</CardTitle>
+                  <Select
+                    value={selectedDomainId?.toString()}
+                    onValueChange={(value) => setSelectedDomainId(Number(value))}
+                  >
+                    <SelectTrigger className="w-[200px]">
+                      <SelectValue placeholder="Select domain" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {domains?.map((domain) => (
+                        <SelectItem key={domain.id} value={domain.id.toString()}>
+                          {domain.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </CardHeader>
+                <CardContent className="overflow-auto max-h-[480px]">
+                  {mailboxes.length > 0 ? (
+                    <table className="w-full text-sm">
+                      <thead className="text-muted-foreground">
+                        <tr>
+                          <th className="text-left pb-2">Email</th>
+                          <th className="text-left pb-2">Quota (MB)</th>
+                          <th className="text-left pb-2">Forwarding</th>
+                          <th className="text-right pb-2">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {mailboxes.map((mailbox) => (
+                          <tr key={mailbox.id} className="border-t border-border/60">
+                            <td className="py-2 font-medium">{mailbox.email}</td>
+                            <td className="py-2">{mailbox.quota_mb}</td>
+                            <td className="py-2">
+                              {mailbox.forwarding_enabled ? mailbox.forwarding_address : '—'}
+                            </td>
+                            <td className="py-2 text-right">
+                          <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => handleDeleteMailbox(mailbox.id)}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p className="text-muted-foreground text-sm">No mailboxes yet.</p>
+                  )}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Create Mailbox</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <form className="space-y-3" onSubmit={handleCreateMailbox}>
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">Local Part</label>
+                      <Input
+                        placeholder="support"
+                        value={mailboxForm.local_part}
+                        onChange={(e) => setMailboxForm({ ...mailboxForm, local_part: e.target.value })}
+                        required
+                      />
+                      <p className="text-xs text-muted-foreground">@{selectedDomain.name}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">Password</label>
+                      <Input
+                        type="password"
+                        placeholder="••••••••"
+                        value={mailboxForm.password}
+                        onChange={(e) => setMailboxForm({ ...mailboxForm, password: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">Quota (MB)</label>
+                      <Input
+                        type="number"
+                        min={100}
+                        value={mailboxForm.quota_mb}
+                        onChange={(e) => setMailboxForm({ ...mailboxForm, quota_mb: Number(e.target.value) })}
+                      />
+                    </div>
+                    <Button type="submit" className="w-full" disabled={createMailbox.isPending}>
+                      {createMailbox.isPending ? 'Creating...' : 'Create Mailbox'}
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="aliases" className="flex-1 mt-4">
+          {!selectedDomain ? (
+            <div className="border rounded-lg p-6 text-center text-muted-foreground">
+              Add a domain first to manage aliases.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-full">
+              <Card className="lg:col-span-2">
+                <CardHeader className="flex items-center justify-between">
+                  <CardTitle>Aliases for {selectedDomain.name}</CardTitle>
+                  <Select
+                    value={selectedDomainId?.toString()}
+                    onValueChange={(value) => setSelectedDomainId(Number(value))}
+                  >
+                    <SelectTrigger className="w-[200px]">
+                      <SelectValue placeholder="Select domain" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {domains?.map((domain) => (
+                        <SelectItem key={domain.id} value={domain.id.toString()}>
+                          {domain.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </CardHeader>
+                <CardContent className="overflow-auto max-h-[480px]">
+                  {aliases.length > 0 ? (
+                    <table className="w-full text-sm">
+                      <thead className="text-muted-foreground">
+                        <tr>
+                          <th className="text-left pb-2">Alias</th>
+                          <th className="text-left pb-2">Destinations</th>
+                          <th className="text-right pb-2">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {aliases.map((alias) => (
+                          <tr key={alias.id} className="border-t border-border/60">
+                            <td className="py-2 font-medium">{alias.email}</td>
+                            <td className="py-2 text-xs text-muted-foreground">
+                              {alias.destinations.map((dest) => dest.destination).join(', ') || '—'}
+                            </td>
+                            <td className="py-2 text-right">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => handleDeleteAlias(alias.id)}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p className="text-muted-foreground text-sm">No aliases yet.</p>
+                  )}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Create Alias</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <form className="space-y-3" onSubmit={handleCreateAlias}>
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">Alias</label>
+                      <Input
+                        placeholder="sales"
+                        value={aliasForm.local_part}
+                        onChange={(e) => setAliasForm({ ...aliasForm, local_part: e.target.value })}
+                        required
+                      />
+                      <p className="text-xs text-muted-foreground">@{selectedDomain.name}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">Destinations</label>
+                      <Input
+                        placeholder="user@example.com, team@example.net"
+                        value={aliasForm.destinations}
+                        onChange={(e) => setAliasForm({ ...aliasForm, destinations: e.target.value })}
+                        required
+                      />
+                      <p className="text-xs text-muted-foreground">Separate multiple emails with commas.</p>
+                    </div>
+                    <Button type="submit" className="w-full" disabled={createAlias.isPending}>
+                      {createAlias.isPending ? 'Creating...' : 'Create Alias'}
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="settings" className="flex-1 mt-4 space-y-4">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>DNS Records</CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Publish these with your DNS provider
+                </p>
+              </CardHeader>
+              <CardContent>
+                {!selectedDomain ? (
+                  <p className="text-sm text-muted-foreground">Select a domain to view DNS guidance.</p>
+                ) : dnsQuery.isLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Loading records...
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">From *</label>
-                    <Input
-                      type="email"
-                      placeholder="sender@example.com"
-                      value={sendEmailForm.from}
-                      onChange={(e) => setSendEmailForm({ ...sendEmailForm, from: e.target.value })}
-                      required
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">From Name</label>
-                  <Input
-                    placeholder="Sender Name"
-                    value={sendEmailForm.from_name}
-                    onChange={(e) => setSendEmailForm({ ...sendEmailForm, from_name: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Subject *</label>
-                  <Input
-                    placeholder="Email subject"
-                    value={sendEmailForm.subject}
-                    onChange={(e) => setSendEmailForm({ ...sendEmailForm, subject: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Body *</label>
-                  <textarea
-                    className="w-full min-h-[200px] px-3 py-2 text-sm border rounded-md resize-none"
-                    placeholder="Email body"
-                    value={sendEmailForm.body}
-                    onChange={(e) => setSendEmailForm({ ...sendEmailForm, body: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="flex gap-2 pt-4">
-                  <Button type="submit" disabled={sendEmail.isPending} className="flex-1">
-                    {sendEmail.isPending ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        Sending...
-                      </>
+                ) : dnsRecords ? (
+                  <div className="space-y-3 text-xs font-mono">
+                    {dnsRecords.mx.map((record, index) => (
+                      <div key={`mx-${index}`} className="border rounded-md p-2">
+                        <p><strong>{record.type}</strong> {record.name}</p>
+                        <p>{record.value}</p>
+                      </div>
+                    ))}
+                    <div className="border rounded-md p-2">
+                      <p><strong>{dnsRecords.spf.type}</strong> {dnsRecords.spf.name}</p>
+                      <p>{dnsRecords.spf.value}</p>
+                    </div>
+                    {dnsRecords.dkim ? (
+                      <div className="border rounded-md p-2">
+                        <p><strong>{dnsRecords.dkim.type}</strong> {dnsRecords.dkim.name}</p>
+                        <p>{dnsRecords.dkim.value}</p>
+                      </div>
                     ) : (
-                      <>
-                        <Send className="h-4 w-4 mr-2" />
-                        Send Email
-                      </>
+                      <p className="text-muted-foreground text-xs">
+                        Add a DKIM key to this domain to generate a record.
+                      </p>
                     )}
-                  </Button>
-                  <Button type="button" variant="outline" onClick={() => setShowSendEmailDialog(false)}>
-                    Cancel
-                  </Button>
+                    <div className="border rounded-md p-2">
+                      <p><strong>{dnsRecords.dmarc.type}</strong> {dnsRecords.dmarc.name}</p>
+                      <p>{dnsRecords.dmarc.value}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No DNS data available.</p>
+                )}
+              </CardContent>
+            </Card>
+            <Card className="xl:col-span-2">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Configuration Preview</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    Generated virtual alias and mailbox maps
+                  </p>
                 </div>
-              </form>
+                <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Refresh
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-3 max-h-[460px] overflow-auto">
+                <div>
+                  <p className="text-xs font-semibold mb-1">Alias Map</p>
+                  <textarea
+                    className="w-full h-24 text-xs font-mono border rounded-md p-2 bg-muted/30"
+                    readOnly
+                    value={configPreview?.alias_map || ''}
+                  />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold mb-1">Mailbox Map</p>
+                  <textarea
+                    className="w-full h-24 text-xs font-mono border rounded-md p-2 bg-muted/30"
+                    readOnly
+                    value={configPreview?.mailbox_map || ''}
+                  />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold mb-1">Dovecot Users</p>
+                  <textarea
+                    className="w-full h-24 text-xs font-mono border rounded-md p-2 bg-muted/30"
+                    readOnly
+                    value={configPreview?.dovecot_users || ''}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+          <Card className="flex flex-col">
+            <CardHeader>
+              <CardTitle>Apply Configuration</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 flex flex-col justify-between gap-4">
+              <div className="space-y-2 text-sm">
+                <p>Deploy the generated configuration files to Postfix and Dovecot.</p>
+                <ul className="list-disc text-muted-foreground pl-5 space-y-1">
+                  <li>Updates virtual alias and mailbox maps</li>
+                  <li>Rebuilds hash maps via <code>postmap</code></li>
+                  <li>Reloads Postfix & Dovecot services</li>
+                </ul>
+              </div>
+              <Button onClick={handleSyncConfigs} disabled={syncConfigs.isPending}>
+                {syncConfigs.isPending ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Applying...
+                  </>
+                ) : (
+                  <>
+                    <Settings2 className="h-4 w-4 mr-2" />
+                    Sync & Reload
+                  </>
+                )}
+              </Button>
             </CardContent>
           </Card>
-        </div>
-      )}
+        </TabsContent>
+        <TabsContent value="client" className="flex-1 mt-4">
+          {!clientMailbox ? (
+            <div className="border rounded-lg p-6 text-center text-muted-foreground">
+              Create a mailbox first to use the mail client.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 xl:grid-cols-4 gap-4 h-full">
+              <Card className="xl:col-span-1">
+                <CardHeader>
+                  <CardTitle>Mailboxes</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <Select
+                    value={clientMailboxId?.toString()}
+                    onValueChange={(value) => {
+                      setClientMailboxId(Number(value));
+                      const mb = mailboxes.find((m) => m.id === Number(value));
+                      if (mb) {
+                        setComposeForm((prev) => ({ ...prev, from: mb.email }));
+                      }
+                      setSelectedMessageId(null);
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select mailbox" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {mailboxes.map((mailbox) => (
+                        <SelectItem key={mailbox.id} value={mailbox.id.toString()}>
+                          {mailbox.email}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button variant="outline" size="sm" onClick={() => messagesQuery.refetch()}>
+                    Refresh Inbox
+                  </Button>
+                  <div className="border rounded-lg max-h-[400px] overflow-auto">
+                    {messagesQuery.isLoading ? (
+                      <div className="p-4 text-sm text-muted-foreground">Loading messages...</div>
+                    ) : messagesQuery.data && messagesQuery.data.length > 0 ? (
+                      <ul className="divide-y">
+                        {messagesQuery.data.map((msg) => (
+                          <li
+                            key={msg.id}
+                            className={`p-3 cursor-pointer ${selectedMessageId === msg.id ? 'bg-muted' : 'hover:bg-muted/50'}`}
+                            onClick={() => setSelectedMessageId(msg.id)}
+                          >
+                            <p className="text-sm font-medium truncate">{msg.subject || '(No subject)'}</p>
+                            <p className="text-xs text-muted-foreground truncate">{msg.from}</p>
+                            <p className="text-xs text-muted-foreground truncate">{msg.snippet}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="p-4 text-sm text-muted-foreground">No messages yet.</div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+              <div className="xl:col-span-3 grid grid-rows-2 gap-4">
+                <Card className="row-span-1">
+                  <CardHeader>
+                    <CardTitle>Message Viewer</CardTitle>
+                  </CardHeader>
+                  <CardContent className="overflow-auto max-h-[340px]">
+                    {selectedMessageId ? (
+                      messageDetailQuery.isLoading ? (
+                        <p className="text-sm text-muted-foreground">Loading message...</p>
+                      ) : messageDetailQuery.data ? (
+                        <div className="space-y-2 text-sm">
+                          <p><strong>From:</strong> {messageDetailQuery.data.from}</p>
+                          <p><strong>To:</strong> {messageDetailQuery.data.to}</p>
+                          <p><strong>Subject:</strong> {messageDetailQuery.data.subject}</p>
+                          <div className="mt-3 border rounded-md p-3 bg-muted/40 text-sm whitespace-pre-wrap">
+                            {messageDetailQuery.data.parts?.map((part, idx) => (
+                              <div key={idx} className="mb-4">
+                                <p className="text-xs text-muted-foreground">[{part.type}]</p>
+                                <p>{part.content}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">Message not found.</p>
+                      )
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Select a message to view.</p>
+                    )}
+                  </CardContent>
+                </Card>
+                <Card className="row-span-1">
+                  <CardHeader>
+                    <CardTitle>Compose Test Email</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <form className="space-y-3" onSubmit={handleSendTestEmail}>
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium">From</label>
+                        <Input
+                          type="email"
+                          value={composeForm.from}
+                          onChange={(e) => setComposeForm({ ...composeForm, from: e.target.value })}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium">To</label>
+                        <Input
+                          type="email"
+                          placeholder="recipient@example.com"
+                          value={composeForm.to}
+                          onChange={(e) => setComposeForm({ ...composeForm, to: e.target.value })}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium">Subject</label>
+                        <Input
+                          value={composeForm.subject}
+                          onChange={(e) => setComposeForm({ ...composeForm, subject: e.target.value })}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium">Body</label>
+                        <textarea
+                          className="w-full border rounded-md p-2 text-sm h-24"
+                          value={composeForm.body}
+                          onChange={(e) => setComposeForm({ ...composeForm, body: e.target.value })}
+                          required
+                        />
+                      </div>
+                      <Button type="submit" disabled={sendEmailMutation.isPending}>
+                        {sendEmailMutation.isPending ? 'Sending...' : 'Send'}
+                      </Button>
+                    </form>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
+

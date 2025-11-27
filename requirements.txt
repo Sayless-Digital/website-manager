@@ -4,3 +4,4 @@ PyMySQL==1.1.0
 psutil==5.9.6
 
 cryptography==46.0.3
+SQLAlchemy==2.0.23

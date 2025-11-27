@@ -20,6 +20,13 @@ from datetime import datetime, timedelta
 import time
 from werkzeug.utils import secure_filename
 import mimetypes
+
+from backend.mail import init_mail_db, service as mail_service
+from backend.mail import configurator as mail_configurator
+from backend.mail import cloudflare as mail_cloudflare
+from backend.mail import maildir_reader
+from backend.mail.exceptions import MailServiceError
+from backend.utils.commands import run_sudo_command
 try:
     import requests
     REQUESTS_AVAILABLE = True
@@ -41,6 +48,12 @@ except ImportError:
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]}})
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+
+# Initialize mail subsystem storage
+try:
+    init_mail_db()
+except Exception as mail_init_err:
+    print(f"Warning: failed to initialize mail database: {mail_init_err}")
 
 # Configuration
 BASE_DIR = Path("/home/mercury/Documents/Storage/Websites")
@@ -71,6 +84,9 @@ EMAIL_CONFIG_FILE = BASE_DIR.parent / 'email_config.json'
 POSTFIX_MAIN_CF = Path("/etc/postfix/main.cf")
 POSTFIX_MASTER_CF = Path("/etc/postfix/master.cf")
 DOVECOT_CONF = Path("/etc/dovecot/dovecot.conf")
+POSTFIX_VIRTUAL_ALIAS_MAP = Path("/etc/postfix/virtual_aliases")
+POSTFIX_VIRTUAL_MAILBOX_MAP = Path("/etc/postfix/virtual_mailboxes")
+DOVECOT_USER_FILE = Path("/etc/dovecot/users")
 
 # Site configuration (will be auto-detected)
 SITES = []
@@ -184,45 +200,6 @@ def get_db_connection(domain):
         )
     except:
         return None
-
-def run_sudo_command(cmd, timeout=30):
-    """Run a command with sudo"""
-    try:
-        # Use shell=True for complex commands with pipes, redirects, etc.
-        if '&&' in cmd or '|' in cmd or '>' in cmd or '<' in cmd:
-            result = subprocess.run(
-                ['sudo', 'sh', '-c', cmd],
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-        else:
-            result = subprocess.run(
-                ['sudo'] + cmd.split(),
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-        return {
-            'success': result.returncode == 0,
-            'stdout': result.stdout,
-            'stderr': result.stderr,
-            'returncode': result.returncode
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            'success': False,
-            'stdout': '',
-            'stderr': 'Command timed out',
-            'returncode': -1
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'stdout': '',
-            'stderr': str(e),
-            'returncode': -1
-        }
 
 def get_service_status(service_name):
     """Get systemd service status"""
@@ -1687,6 +1664,291 @@ def get_wordpress_plugins(domain):
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+# ==================== MAIL MANAGER API ====================
+
+def mail_error_response(action, error):
+    app.logger.warning(f"[MailManager] action={action} error={error}")
+    return jsonify({'error': str(error)}), 400
+
+
+@app.route('/api/mail/domains', methods=['GET'])
+def list_mail_domains():
+    try:
+        active_param = request.args.get('active')
+        active = parse_bool(active_param) if active_param is not None else None
+        domains = mail_service.list_domains(active)
+        return jsonify(domains)
+    except MailServiceError as e:
+        return mail_error_response('list_domains', e)
+    except Exception as e:
+        app.logger.exception("[MailManager] list_domains failed")
+        return jsonify({'error': 'Failed to list domains'}), 500
+
+
+@app.route('/api/mail/domains', methods=['POST'])
+def create_mail_domain():
+    payload = get_request_data()
+    try:
+        domain = mail_service.create_domain(payload)
+        app.logger.info(f"[MailManager] domain_created {domain['name']}")
+        return jsonify(domain), 201
+    except MailServiceError as e:
+        return mail_error_response('create_domain', e)
+    except Exception as e:
+        app.logger.exception("[MailManager] create_domain failed")
+        return jsonify({'error': 'Failed to create domain'}), 500
+
+
+@app.route('/api/mail/domains/<int:domain_id>', methods=['GET', 'PUT', 'DELETE'])
+def manage_mail_domain(domain_id):
+    if request.method == 'GET':
+        try:
+            domain = mail_service.get_domain(domain_id)
+            return jsonify(domain)
+        except MailServiceError as e:
+            return mail_error_response('get_domain', e)
+        except Exception:
+            app.logger.exception("[MailManager] get_domain failed")
+            return jsonify({'error': 'Failed to load domain'}), 500
+    elif request.method == 'PUT':
+        payload = get_request_data()
+        try:
+            domain = mail_service.update_domain(domain_id, payload)
+            app.logger.info(f"[MailManager] domain_updated {domain['name']}")
+            return jsonify(domain)
+        except MailServiceError as e:
+            return mail_error_response('update_domain', e)
+        except Exception:
+            app.logger.exception("[MailManager] update_domain failed")
+            return jsonify({'error': 'Failed to update domain'}), 500
+    else:  # DELETE
+        try:
+            mail_service.delete_domain(domain_id)
+            app.logger.info(f"[MailManager] domain_deleted id={domain_id}")
+            return jsonify({'success': True})
+        except MailServiceError as e:
+            return mail_error_response('delete_domain', e)
+        except Exception:
+            app.logger.exception("[MailManager] delete_domain failed")
+            return jsonify({'error': 'Failed to delete domain'}), 500
+
+
+@app.route('/api/mail/domains/<int:domain_id>/dns', methods=['GET'])
+def get_mail_domain_dns(domain_id):
+    try:
+        records = mail_service.get_domain_dns(domain_id)
+        return jsonify(records)
+    except MailServiceError as e:
+        return mail_error_response('get_domain_dns', e)
+    except Exception:
+        app.logger.exception("[MailManager] get_domain_dns failed")
+        return jsonify({'error': 'Failed to load DNS records'}), 500
+
+
+@app.route('/api/mail/cloudflare/zones', methods=['GET'])
+def list_mail_cloudflare_zones():
+    try:
+        zones = mail_cloudflare.list_zones()
+        return jsonify(zones)
+    except MailServiceError as e:
+        return mail_error_response('cloudflare_list_zones', e)
+    except Exception:
+        app.logger.exception("[MailManager] cloudflare_list_zones failed")
+        return jsonify({'error': 'Failed to fetch Cloudflare zones'}), 500
+
+
+@app.route('/api/mail/cloudflare/zones/<zone_id>/import', methods=['POST'])
+def import_cloudflare_zone(zone_id):
+    payload = get_request_data()
+    try:
+        zone_name = payload.get('name')
+        if not zone_name:
+            raise MailServiceError("Zone name required")
+        domain_data = {
+            'name': zone_name,
+            'display_name': zone_name,
+            'managed_by_cloudflare': True,
+            'cloudflare_zone_id': zone_id,
+            'auto_dns_enabled': bool(payload.get('auto_dns_enabled', True)),
+        }
+        domain = mail_service.create_domain(domain_data)
+        app.logger.info(f"[MailManager] imported_cloudflare_domain {zone_name}")
+        return jsonify(domain), 201
+    except MailServiceError as e:
+        return mail_error_response('import_cloudflare_zone', e)
+    except Exception:
+        app.logger.exception("[MailManager] import_cloudflare_zone failed")
+        return jsonify({'error': 'Failed to import zone'}), 500
+
+
+@app.route('/api/mail/mailboxes', methods=['GET'])
+def list_mail_mailboxes():
+    try:
+        domain_id = request.args.get('domain_id', type=int)
+        mailboxes = mail_service.list_mailboxes(domain_id)
+        return jsonify(mailboxes)
+    except MailServiceError as e:
+        return mail_error_response('list_mailboxes', e)
+    except Exception:
+        app.logger.exception("[MailManager] list_mailboxes failed")
+        return jsonify({'error': 'Failed to list mailboxes'}), 500
+
+
+@app.route('/api/mail/mailboxes', methods=['POST'])
+def create_mail_mailbox():
+    payload = get_request_data()
+    try:
+        mailbox = mail_service.create_mailbox(payload)
+        app.logger.info(f"[MailManager] mailbox_created {mailbox['email']}")
+        return jsonify(mailbox), 201
+    except MailServiceError as e:
+        return mail_error_response('create_mailbox', e)
+    except Exception:
+        app.logger.exception("[MailManager] create_mailbox failed")
+        return jsonify({'error': 'Failed to create mailbox'}), 500
+
+
+@app.route('/api/mail/mailboxes/<int:mailbox_id>', methods=['GET', 'PUT', 'DELETE'])
+def manage_mail_mailbox(mailbox_id):
+    if request.method == 'GET':
+        try:
+            mailbox = mail_service.get_mailbox(mailbox_id)
+            return jsonify(mailbox)
+        except MailServiceError as e:
+            return mail_error_response('get_mailbox', e)
+        except Exception:
+            app.logger.exception("[MailManager] get_mailbox failed")
+            return jsonify({'error': 'Failed to load mailbox'}), 500
+    elif request.method == 'PUT':
+        payload = get_request_data()
+        try:
+            mailbox = mail_service.update_mailbox(mailbox_id, payload)
+            app.logger.info(f"[MailManager] mailbox_updated {mailbox['email']}")
+            return jsonify(mailbox)
+        except MailServiceError as e:
+            return mail_error_response('update_mailbox', e)
+        except Exception:
+            app.logger.exception("[MailManager] update_mailbox failed")
+            return jsonify({'error': 'Failed to update mailbox'}), 500
+    else:
+        try:
+            mail_service.delete_mailbox(mailbox_id)
+            app.logger.info(f"[MailManager] mailbox_deleted id={mailbox_id}")
+            return jsonify({'success': True})
+        except MailServiceError as e:
+            return mail_error_response('delete_mailbox', e)
+        except Exception:
+            app.logger.exception("[MailManager] delete_mailbox failed")
+            return jsonify({'error': 'Failed to delete mailbox'}), 500
+
+
+@app.route('/api/mail/mailboxes/<int:mailbox_id>/messages', methods=['GET'])
+def list_mailbox_messages(mailbox_id):
+    try:
+        limit = request.args.get('limit', default=20, type=int)
+        messages = maildir_reader.list_messages(mailbox_id, limit=limit)
+        return jsonify(messages)
+    except Exception as e:
+        app.logger.exception("[MailManager] list_mailbox_messages failed")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mail/mailboxes/<int:mailbox_id>/messages/<message_id>', methods=['GET'])
+def get_mailbox_message(mailbox_id, message_id):
+    try:
+        message = maildir_reader.get_message_body(mailbox_id, message_id)
+        return jsonify(message)
+    except Exception as e:
+        app.logger.exception("[MailManager] get_mailbox_message failed")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mail/aliases', methods=['GET'])
+def list_mail_aliases():
+    try:
+        domain_id = request.args.get('domain_id', type=int)
+        aliases = mail_service.list_aliases(domain_id)
+        return jsonify(aliases)
+    except MailServiceError as e:
+        return mail_error_response('list_aliases', e)
+    except Exception:
+        app.logger.exception("[MailManager] list_aliases failed")
+        return jsonify({'error': 'Failed to list aliases'}), 500
+
+
+@app.route('/api/mail/aliases', methods=['POST'])
+def create_mail_alias():
+    payload = get_request_data()
+    try:
+        alias = mail_service.create_alias(payload)
+        app.logger.info(f"[MailManager] alias_created {alias['email']}")
+        return jsonify(alias), 201
+    except MailServiceError as e:
+        return mail_error_response('create_alias', e)
+    except Exception:
+        app.logger.exception("[MailManager] create_alias failed")
+        return jsonify({'error': 'Failed to create alias'}), 500
+
+
+@app.route('/api/mail/aliases/<int:alias_id>', methods=['GET', 'PUT', 'DELETE'])
+def manage_mail_alias(alias_id):
+    if request.method == 'GET':
+        try:
+            alias = mail_service.get_alias(alias_id)
+            return jsonify(alias)
+        except MailServiceError as e:
+            return mail_error_response('get_alias', e)
+        except Exception:
+            app.logger.exception("[MailManager] get_alias failed")
+            return jsonify({'error': 'Failed to load alias'}), 500
+    elif request.method == 'PUT':
+        payload = get_request_data()
+        try:
+            alias = mail_service.update_alias(alias_id, payload)
+            app.logger.info(f"[MailManager] alias_updated {alias['email']}")
+            return jsonify(alias)
+        except MailServiceError as e:
+            return mail_error_response('update_alias', e)
+        except Exception:
+            app.logger.exception("[MailManager] update_alias failed")
+            return jsonify({'error': 'Failed to update alias'}), 500
+    else:
+        try:
+            mail_service.delete_alias(alias_id)
+            app.logger.info(f"[MailManager] alias_deleted id={alias_id}")
+            return jsonify({'success': True})
+        except MailServiceError as e:
+            return mail_error_response('delete_alias', e)
+        except Exception:
+            app.logger.exception("[MailManager] delete_alias failed")
+            return jsonify({'error': 'Failed to delete alias'}), 500
+
+
+@app.route('/api/mail/configs', methods=['GET'])
+def preview_mail_configs():
+    try:
+        configs = mail_configurator.generate_mail_configs()
+        return jsonify(configs)
+    except Exception as e:
+        app.logger.exception("[MailManager] preview_configs failed")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mail/configs/sync', methods=['POST'])
+def sync_mail_configs():
+    data = get_request_data()
+    dry_run = parse_bool(data.get('dry_run')) if data else False
+    try:
+        configs = mail_configurator.generate_mail_configs()
+        if dry_run:
+            return jsonify({'dry_run': True, 'stats': configs['stats']})
+        stats = synchronize_mail_configs()
+        app.logger.info(f"[MailManager] configs_synced stats={stats}")
+        return jsonify({'success': True, 'stats': stats})
+    except Exception as e:
+        app.logger.exception("[MailManager] sync_mail_configs failed")
+        return jsonify({'error': str(e)}), 500
+
 def parse_theme_header(style_file):
     """Parse WordPress theme header from style.css"""
     try:
@@ -2540,7 +2802,42 @@ def log_cloudflare_email_event(action, zone_id=None, account_id=None, status=Non
     app.logger.info(msg)
 
 
-def perform_cloudflare_request(method, url, *, headers=None, max_attempts=3, backoff_seconds=1, **kwargs):
+def parse_bool(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def get_request_data():
+    return request.get_json(silent=True) or {}
+
+
+def deploy_mail_config_file(target_path: Path, content: str):
+    """Write configuration content to a privileged path via sudo."""
+    temp_path = Path("/tmp") / f"wm_{target_path.name}"
+    temp_path.write_text(content or "", encoding='utf-8')
+    result = run_sudo_command(f'cp {temp_path} {target_path}')
+    if not result['success']:
+        raise RuntimeError(result['stderr'] or f'Failed to write {target_path}')
+    run_sudo_command(f'chown root:root {target_path}')
+    run_sudo_command(f'chmod 640 {target_path}')
+
+
+def synchronize_mail_configs():
+    configs = mail_configurator.generate_mail_configs()
+    deploy_mail_config_file(POSTFIX_VIRTUAL_ALIAS_MAP, configs['alias_map'])
+    deploy_mail_config_file(POSTFIX_VIRTUAL_MAILBOX_MAP, configs['mailbox_map'])
+    deploy_mail_config_file(DOVECOT_USER_FILE, configs['dovecot_users'])
+
+    run_sudo_command(f'postmap {POSTFIX_VIRTUAL_ALIAS_MAP}')
+    run_sudo_command(f'postmap {POSTFIX_VIRTUAL_MAILBOX_MAP}')
+    run_sudo_command('systemctl reload postfix')
+    run_sudo_command('systemctl reload dovecot')
+    return configs['stats']
+
+
 def perform_cloudflare_request(method, url, *, headers=None, max_attempts=3, backoff_seconds=1, **kwargs):
     """Wrapper around requests with simple retry/backoff for 429 responses"""
     attempt = 1

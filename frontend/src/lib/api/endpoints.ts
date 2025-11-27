@@ -62,4 +62,19 @@ export const API_ENDPOINTS = {
     SEND: '/api/email/send',
     USERS: '/api/email/users',
   },
+  MAIL: {
+    DOMAINS: '/api/mail/domains',
+    DOMAIN: (id: number) => `/api/mail/domains/${id}`,
+    DOMAIN_DNS: (id: number) => `/api/mail/domains/${id}/dns`,
+    MAILBOXES: '/api/mail/mailboxes',
+    MAILBOX: (id: number) => `/api/mail/mailboxes/${id}`,
+    MAILBOX_MESSAGES: (id: number, messageId?: string) =>
+      messageId ? `/api/mail/mailboxes/${id}/messages/${messageId}` : `/api/mail/mailboxes/${id}/messages`,
+    ALIASES: '/api/mail/aliases',
+    ALIAS: (id: number) => `/api/mail/aliases/${id}`,
+    CONFIGS: '/api/mail/configs',
+    SYNC_CONFIGS: '/api/mail/configs/sync',
+    CF_ZONES: '/api/mail/cloudflare/zones',
+    CF_IMPORT: (zoneId: string) => `/api/mail/cloudflare/zones/${zoneId}/import`,
+  },
 } as const;
