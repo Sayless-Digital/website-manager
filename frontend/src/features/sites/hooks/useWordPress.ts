@@ -111,7 +111,35 @@ export const useWordPressPlugins = (domain: string) => {
       const { data } = await apiClient.post(API_ENDPOINTS.SITES.WORDPRESS_PLUGIN_ACTION(domain, plugin, action));
       return data;
     },
+    onMutate: async ({ plugin, action }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['wordpress-plugins', domain] });
+      
+      // Snapshot the previous value
+      const previousPlugins = queryClient.getQueryData<WordPressPlugin[]>(['wordpress-plugins', domain]);
+      
+      // Optimistically update to the new value
+      if (previousPlugins) {
+        queryClient.setQueryData<WordPressPlugin[]>(['wordpress-plugins', domain], (old) => {
+          if (!old) return old;
+          return old.map(p => 
+            p.name === plugin 
+              ? { ...p, status: action === 'activate' ? 'active' : 'inactive' }
+              : p
+          );
+        });
+      }
+      
+      return { previousPlugins };
+    },
+    onError: (_err, _variables, context) => {
+      // Rollback to previous value on error
+      if (context?.previousPlugins) {
+        queryClient.setQueryData(['wordpress-plugins', domain], context.previousPlugins);
+      }
+    },
     onSuccess: () => {
+      // Invalidate and immediately refetch to ensure consistency
       queryClient.invalidateQueries({ queryKey: ['wordpress-plugins', domain] });
     },
   });

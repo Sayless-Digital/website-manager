@@ -26,7 +26,7 @@ export function ServiceCard({ service, onAction }: ServiceCardProps) {
   return (
     <Card className="h-full transition-shadow hover:shadow-lg">
       <CardHeader className="space-y-2">
-        <div className="space-y-1">
+          <div className="space-y-1">
           <CardTitle className="text-lg font-semibold flex items-center gap-2">
             {service.display_name}
             <div

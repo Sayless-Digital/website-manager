@@ -5,6 +5,8 @@ import { API_ENDPOINTS } from '@/lib/api/endpoints';
 export interface CloudflareZone {
   id: string;
   name: string;
+  account_id?: string;
+  account_name?: string;
   status: string;
   plan: string;
   development_mode: number;
@@ -191,16 +193,29 @@ export const useEnableEmailRouting = () => {
   });
 };
 
-export const useEmailAddresses = (zoneId: string) => {
+export const useEmailAddresses = (zoneId?: string, accountId?: string) => {
   return useQuery({
-    queryKey: ['cloudflare', 'zones', zoneId, 'email', 'addresses'],
+    queryKey: ['cloudflare', 'zones', zoneId, 'email', 'addresses', accountId],
     queryFn: async () => {
-      const { data } = await apiClient.get<EmailAddress[]>(
-        API_ENDPOINTS.CLOUDFLARE.EMAIL_ADDRESSES(zoneId)
-      );
-      return data;
+      if (!zoneId || !accountId) {
+        return [];
+      }
+      try {
+        const { data } = await apiClient.get<EmailAddress[]>(
+          API_ENDPOINTS.CLOUDFLARE.EMAIL_ADDRESSES(zoneId),
+          { params: { account_id: accountId } }
+        );
+        return data || [];
+      } catch (error: any) {
+        // If 404 or email routing not enabled, return empty array
+        if (error.response?.status === 404 || error.response?.status === 400) {
+          return [];
+        }
+        throw error;
+      }
     },
-    enabled: !!zoneId,
+    enabled: !!zoneId && !!accountId,
+    retry: false,
   });
 };
 
@@ -208,10 +223,13 @@ export const useCreateEmailAddress = () => {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: async ({ zoneId, email, destination }: { zoneId: string; email: string; destination: string }) => {
+    mutationFn: async ({ zoneId, accountId, email, destination }: { zoneId: string; accountId: string; email: string; destination: string }) => {
+      if (!accountId) {
+        throw new Error('Cloudflare account ID is required');
+      }
       const { data } = await apiClient.post(
         API_ENDPOINTS.CLOUDFLARE.EMAIL_ADDRESSES(zoneId),
-        { email, destination }
+        { email, destination, account_id: accountId }
       );
       return data;
     },
@@ -225,10 +243,13 @@ export const useUpdateEmailAddress = () => {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: async ({ zoneId, tag, email, destination }: { zoneId: string; tag: string; email: string; destination: string }) => {
+    mutationFn: async ({ zoneId, accountId, tag, email, destination }: { zoneId: string; accountId: string; tag: string; email: string; destination: string }) => {
+      if (!accountId) {
+        throw new Error('Cloudflare account ID is required');
+      }
       const { data } = await apiClient.put(
         API_ENDPOINTS.CLOUDFLARE.EMAIL_ADDRESS(zoneId, tag),
-        { email, destination }
+        { email, destination, account_id: accountId }
       );
       return data;
     },
@@ -242,9 +263,13 @@ export const useDeleteEmailAddress = () => {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: async ({ zoneId, tag }: { zoneId: string; tag: string }) => {
+    mutationFn: async ({ zoneId, accountId, tag }: { zoneId: string; accountId: string; tag: string }) => {
+      if (!accountId) {
+        throw new Error('Cloudflare account ID is required');
+      }
       const { data } = await apiClient.delete(
-        API_ENDPOINTS.CLOUDFLARE.EMAIL_ADDRESS(zoneId, tag)
+        API_ENDPOINTS.CLOUDFLARE.EMAIL_ADDRESS(zoneId, tag),
+        { params: { account_id: accountId } }
       );
       return data;
     },

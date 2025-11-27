@@ -359,7 +359,8 @@ export default function Backups() {
                             </div>
                           </td>
                           <td className="p-3">
-                            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 flex items-center gap-1.5">
+                              <Database className="h-3.5 w-3.5 text-blue-500" />
                               Database
                             </Badge>
                           </td>
@@ -381,7 +382,8 @@ export default function Backups() {
                             </div>
                           </td>
                           <td className="p-3">
-                            <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
+                            <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 flex items-center gap-1.5">
+                              <FileArchive className="h-3.5 w-3.5 text-yellow-600" />
                               Files
                             </Badge>
                           </td>
@@ -440,35 +442,27 @@ export default function Backups() {
                           <div className="flex items-center gap-2">
                             {backup.type === 'both' && (
                               <>
-                                <div className="flex items-center gap-1.5">
+                                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 flex items-center gap-1.5">
                                   <Database className="h-3.5 w-3.5 text-blue-500" />
-                                  <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-                                    Database
-                                  </Badge>
-                                </div>
-                                <div className="flex items-center gap-1.5">
+                                  Database
+                                </Badge>
+                                <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 flex items-center gap-1.5">
                                   <FileArchive className="h-3.5 w-3.5 text-yellow-600" />
-                                  <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
-                                    Files
-                                  </Badge>
-                                </div>
+                                  Files
+                                </Badge>
                               </>
                             )}
                             {backup.type === 'database' && (
-                              <div className="flex items-center gap-1.5">
+                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 flex items-center gap-1.5">
                                 <Database className="h-3.5 w-3.5 text-blue-500" />
-                                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-                                  Database
-                                </Badge>
-                              </div>
+                                Database
+                              </Badge>
                             )}
                             {backup.type === 'files' && (
-                              <div className="flex items-center gap-1.5">
+                              <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 flex items-center gap-1.5">
                                 <FileArchive className="h-3.5 w-3.5 text-yellow-600" />
-                                <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
-                                  Files
-                                </Badge>
-                              </div>
+                                Files
+                              </Badge>
                             )}
                           </div>
                         </td>

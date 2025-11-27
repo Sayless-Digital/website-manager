@@ -3,7 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { Globe, Check, AlertTriangle, RefreshCw, Server, XCircle, Package, Palette, Power, Info, Layers, Search } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Globe, Check, AlertTriangle, RefreshCw, Server, XCircle, Package, Palette, Power, Layers, Search } from 'lucide-react';
 import { useWordPressInfo, useChangeDomain, useCheckDNS, useWordPressPlugins, useWordPressThemes, type WordPressPlugin, type WordPressTheme } from '@/features/sites/hooks/useWordPress';
 import { showNotification } from '@/lib/notifications';
 import { useState, useMemo } from 'react';
@@ -12,7 +13,7 @@ import { cn } from '@/lib/utils/cn';
 export default function WordPressManager() {
   const { domain } = useParams<{ domain: string }>();
   const [newDomain, setNewDomain] = useState('');
-  const [activeTab, setActiveTab] = useState('plugins');
+  const [activeTab, setActiveTab] = useState('domain');
   const [pluginSearch, setPluginSearch] = useState('');
   const [themeSearch, setThemeSearch] = useState('');
 
@@ -127,6 +128,18 @@ export default function WordPressManager() {
       <div className="flex items-center gap-4 flex-shrink-0">
         <div className="flex items-center gap-1">
           <button
+            onClick={() => setActiveTab('domain')}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors",
+              activeTab === 'domain' 
+                ? "bg-amber-50 border-amber-200 text-foreground" 
+                : "bg-background border-border hover:bg-muted/50"
+            )}
+          >
+            <Globe className="h-3.5 w-3.5" />
+            <span>Domain</span>
+          </button>
+          <button
             onClick={() => setActiveTab('themes')}
             className={cn(
               "flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors",
@@ -149,18 +162,6 @@ export default function WordPressManager() {
           >
             <Package className="h-3.5 w-3.5" />
             <span>Plugins</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('info')}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors",
-              activeTab === 'info' 
-                ? "bg-amber-50 border-amber-200 text-foreground" 
-                : "bg-background border-border hover:bg-muted/50"
-            )}
-          >
-            <Info className="h-3.5 w-3.5" />
-            <span>Info</span>
           </button>
         </div>
         {(activeTab === 'plugins' || activeTab === 'themes') && (
@@ -232,9 +233,13 @@ export default function WordPressManager() {
                                 {
                                   onSuccess: () => {
                                     showNotification('success', `Plugin ${action}d successfully`);
+                                    // Immediately refetch to update UI
+                                    refetchPlugins();
                                   },
                                   onError: (error: any) => {
                                     showNotification('error', error.response?.data?.error || `Failed to ${action} plugin`);
+                                    // Refetch on error to restore correct state
+                                    refetchPlugins();
                                   },
                                 }
                               );
@@ -320,69 +325,71 @@ export default function WordPressManager() {
         </div>
       )}
 
-      {/* Info Tab */}
-      {activeTab === 'info' && (
+      {/* Domain Tab */}
+      {activeTab === 'domain' && (
           <div className="grid gap-6 md:grid-cols-2 flex-1 min-h-0 overflow-auto">
-            {/* Site Information */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Site Information</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">Version</span>
-                    <p>{wpInfo?.version || 'Unknown'}</p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">Site URL</span>
-                    <p className="truncate" title={wpInfo?.site_url}>{wpInfo?.site_url || 'Unknown'}</p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">Admin Email</span>
-                    <p className="truncate" title={wpInfo?.admin_email}>{wpInfo?.admin_email || 'Unknown'}</p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">Debug Mode</span>
-                    <div className="flex items-center gap-2">
-                      <div className={`h-2 w-2 rounded-full ${wpInfo?.debug_mode ? 'bg-yellow-500' : 'bg-green-500'}`} />
-                      <span>{wpInfo?.debug_mode ? 'Enabled' : 'Disabled'}</span>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
             {/* Change Domain */}
             <Card>
               <CardHeader>
-                <CardTitle>Change Domain</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <Globe className="h-5 w-5 text-primary" />
+                  Change Domain
+                </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm text-blue-800">
-                  <p>This tool will:</p>
-                  <ul className="list-disc list-inside ml-1 mt-1 space-y-0.5">
-                    <li>Update <code>WP_HOME</code> and <code>WP_SITEURL</code></li>
+                  <p className="font-semibold mb-2">This tool will:</p>
+                  <ul className="list-disc list-inside ml-1 space-y-0.5">
+                    <li>Update <code className="bg-blue-100 px-1 rounded">WP_HOME</code> and <code className="bg-blue-100 px-1 rounded">WP_SITEURL</code></li>
                     <li>Search & Replace URLs in the database</li>
                     <li>Rename Apache configuration files</li>
                     <li>Attempt to update Cloudflare DNS & Tunnel config</li>
                   </ul>
                 </div>
                 
-                <div className="flex gap-2">
-                  <Input 
-                    placeholder="new-domain.com" 
-                    value={newDomain}
-                    onChange={(e) => setNewDomain(e.target.value)}
-                  />
-                  <Button 
-                    onClick={handleChangeDomain}
-                    disabled={!newDomain || changeDomainMutation.isPending}
-                  >
-                    {changeDomainMutation.isPending ? (
-                      <RefreshCw className="h-4 w-4 animate-spin" />
-                    ) : 'Update'}
-                  </Button>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">New Domain</label>
+                  <div className="flex gap-2">
+                    <Input 
+                      placeholder="new-domain.com" 
+                      value={newDomain}
+                      onChange={(e) => setNewDomain(e.target.value)}
+                    />
+                    <Button 
+                      onClick={handleChangeDomain}
+                      disabled={!newDomain || changeDomainMutation.isPending}
+                    >
+                      {changeDomainMutation.isPending ? (
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                      ) : 'Update'}
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Current Domain Info */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Globe className="h-5 w-5 text-green-500" />
+                  Current Domain
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium text-muted-foreground">Domain</span>
+                    <p className="font-mono text-lg font-semibold">{domain}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium text-muted-foreground">Site URL</span>
+                    <p className="font-mono text-sm truncate" title={wpInfo?.site_url}>{wpInfo?.site_url || 'Unknown'}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium text-muted-foreground">Home URL</span>
+                    <p className="font-mono text-sm truncate" title={wpInfo?.home_url}>{wpInfo?.home_url || 'Unknown'}</p>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -391,7 +398,10 @@ export default function WordPressManager() {
             <Card className="md:col-span-2">
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <CardTitle>Connection Diagnostics</CardTitle>
+                  <CardTitle className="flex items-center gap-2">
+                    <Server className="h-5 w-5 text-blue-500" />
+                    Connection Diagnostics
+                  </CardTitle>
                   <Button variant="outline" size="sm" onClick={() => checkDNS()} disabled={dnsLoading}>
                     {dnsLoading ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <Globe className="h-4 w-4 mr-2" />}
                     Check Connection

@@ -693,30 +693,30 @@ WHERE table_schema = DATABASE()`;
         tablesData?.tables && tablesData.tables.length > 0 && (
           <div className="border rounded-lg overflow-hidden flex-shrink-0" style={{ height: '55vh' }}>
             <div className="h-full overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted text-left border-b sticky top-0 z-10">
-                  <tr>
-                    <th className="p-3 font-medium bg-muted">Table Name</th>
-                    <th className="p-3 font-medium bg-muted">Rows</th>
-                    <th className="p-3 font-medium bg-muted">Size</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {tablesData.tables.map((table) => (
+            <table className="w-full text-sm">
+              <thead className="bg-muted text-left border-b sticky top-0 z-10">
+                <tr>
+                  <th className="p-3 font-medium bg-muted">Table Name</th>
+                  <th className="p-3 font-medium bg-muted">Rows</th>
+                  <th className="p-3 font-medium bg-muted">Size</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {tablesData.tables.map((table) => (
                     <tr 
                       key={table.name} 
                       className="hover:bg-muted/50 cursor-pointer"
                       onClick={() => handleOpenTable(table.name)}
                     >
-                      <td className="p-3 font-medium">{table.name}</td>
-                      <td className="p-3 text-muted-foreground">{table.rows.toLocaleString()}</td>
-                      <td className="p-3 text-muted-foreground">{formatBytes(table.size_mb * 1024 * 1024)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                    <td className="p-3 font-medium">{table.name}</td>
+                    <td className="p-3 text-muted-foreground">{table.rows.toLocaleString()}</td>
+                    <td className="p-3 text-muted-foreground">{formatBytes(table.size_mb * 1024 * 1024)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
+        </div>
         )
       )}
     </div>

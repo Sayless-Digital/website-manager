@@ -43,6 +43,9 @@ export const API_ENDPOINTS = {
   },
   CRON: {
     LIST: '/api/cron/list',
+    CREATE: '/api/cron/create',
+    DELETE: '/api/cron/delete',
+    TOGGLE: '/api/cron/toggle',
   },
   CLOUDFLARE: {
     CONFIG: '/api/cloudflare/config',

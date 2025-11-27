@@ -1669,7 +1669,15 @@ def get_wordpress_plugins(domain):
             if plugin_data:
                 # Check if plugin is active
                 plugin_slug = plugin_dir.name
-                if plugin_slug in active_plugins or f"{plugin_slug}/{plugin_file.name}" in active_plugins:
+                plugin_path = f"{plugin_slug}/{plugin_file.name}"
+                # Check if plugin is active by matching slug or full path
+                is_active = any(
+                    p == plugin_slug or 
+                    p == plugin_path or 
+                    p.startswith(f'{plugin_slug}/')
+                    for p in active_plugins
+                )
+                if is_active:
                     plugin_data['status'] = 'active'
                 plugins.append(plugin_data)
         
@@ -1828,13 +1836,13 @@ def manage_wordpress_plugin(domain, plugin, action):
                 if result:
                     active_plugins = php_unserialize_array(result.get('option_value', ''))
                 
+                # Normalize active plugins list - remove any entries that match this plugin (by slug or full path)
+                # This handles cases where the plugin might be stored in different formats
+                active_plugins = [p for p in active_plugins if not (p == plugin or p.startswith(f'{plugin}/'))]
+                
                 # Update active plugins list
                 if action == 'activate' or action == 'enable':
-                    if plugin_path not in active_plugins:
-                        active_plugins.append(plugin_path)
-                else:  # deactivate or disable
-                    if plugin_path in active_plugins:
-                        active_plugins.remove(plugin_path)
+                    active_plugins.append(plugin_path)
                 
                 # Serialize and update database
                 serialized = php_serialize_array(active_plugins)
@@ -2066,20 +2074,427 @@ def get_service_logs(service_name):
 
 # ==================== CRON JOBS ====================
 
+def parse_cron_line(line):
+    """Parse a cron line into structured components"""
+    original_line = line
+    line = line.strip()
+    if not line:
+        return None
+    
+    # Handle commented out jobs (disabled)
+    enabled = True
+    if line.startswith('#'):
+        enabled = False
+        # Remove leading # but keep track of original
+        line = line.lstrip('#').strip()
+        
+        # Check if this looks like an actual cron job (not just a comment)
+        parts = line.split()
+        
+        # Must have at least 6 parts (5 for schedule + command) or start with @keyword
+        looks_like_cron = False
+        
+        if parts and parts[0].startswith('@'):
+            # Special cron keywords
+            looks_like_cron = parts[0] in ['@reboot', '@yearly', '@annually', '@monthly', '@weekly', '@daily', '@midnight', '@hourly']
+        elif len(parts) >= 6:
+            # Standard cron format: 5 schedule parts + command
+            schedule_parts = parts[:5]
+            # Each schedule part should contain only cron characters (numbers, *, -, , /)
+            cron_chars = set('0123456789*,-/')
+            if all(any(c in cron_chars for c in part) or part.isdigit() or part in ['*', '-'] for part in schedule_parts):
+                looks_like_cron = True
+        
+        # If it doesn't look like a cron job, it's just a comment - skip it
+        if not looks_like_cron:
+            return None
+    
+    # Extract comment if present (before the cron line)
+    comment = None
+    parts = line.split()
+    
+    # Cron format: [minute] [hour] [day_of_month] [month] [day_of_week] [user] command
+    # Or: @reboot, @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly
+    if len(parts) < 2:
+        return None
+    
+    # Check for special keywords
+    if parts[0].startswith('@'):
+        # Validate it's a real cron keyword
+        if parts[0] not in ['@reboot', '@yearly', '@annually', '@monthly', '@weekly', '@daily', '@midnight', '@hourly']:
+            return None
+        schedule = parts[0]
+        command_start = 1
+        user = None
+    else:
+        # Standard cron: min hour day month weekday [user] command
+        if len(parts) < 6:
+            return None
+        
+        # Validate the schedule parts look like a real cron schedule
+        schedule_parts = parts[:5]
+        cron_chars = set('0123456789*,-/')
+        
+        # Each part must be valid cron syntax (only numbers, *, -, , /)
+        for part in schedule_parts:
+            if not all(c in cron_chars for c in part.replace(',', '').replace('-', '').replace('*', '').replace('/', '')):
+                # Contains invalid characters - might be a comment or description
+                return None
+        
+        schedule = ' '.join(schedule_parts)
+        command_start = 5
+        user = None
+        
+        # Check if 6th part looks like a user (simple alphanumeric, no paths or special chars)
+        # User field is very rare in modern cron - usually only in system crontabs
+        # We should be very conservative about detecting users
+        if len(parts) > 5:
+            potential_user = parts[5]
+            # User field detection: must be simple alphanumeric (no special chars except _ and -)
+            # AND the next part must clearly be a command (starts with / or is a common command)
+            # AND it's not a common command word like "cd", "echo", etc.
+            common_commands = {'cd', 'echo', 'find', 'grep', 'sed', 'awk', 'cat', 'ls', 'rm', 'cp', 'mv', 'mkdir', 'touch'}
+            
+            is_simple_user = (potential_user.replace('_', '').replace('-', '').isalnum() and 
+                             len(potential_user) > 0 and
+                             potential_user not in common_commands)
+            
+            if is_simple_user and len(parts) > 6:
+                next_part = parts[6]
+                # Next part should be a clear command indicator
+                if (next_part.startswith('/') or 
+                    next_part.startswith('$') or
+                    any(cmd in next_part.lower() for cmd in ['php', 'python', 'bash', 'sh', 'node', 'ruby', 'perl'])):
+                    user = potential_user
+                    command_start = 6
+    
+    command = ' '.join(parts[command_start:])
+    
+    # Validate that we have a reasonable command (not just a description)
+    # Command should contain actual executable paths or commands, not just text
+    if not command or len(command) < 3:
+        return None
+    
+    # Additional validation: command should not just be descriptive text
+    # Real commands usually have paths (/), variables ($), or common command words
+    has_path_or_command = ('/' in command or 
+                          '$' in command or
+                          any(cmd in command.lower() for cmd in ['php', 'python', 'bash', 'sh', 'node', 'echo', 'find', 'cd ', 'mkdir', 'rm ', 'cp ', 'mv ']))
+    
+    if not has_path_or_command:
+        # Looks like it might just be descriptive text, not a real command
+        return None
+    
+    # Store original raw line for updates (without comment prefix, but with # if disabled)
+    if enabled:
+        raw_line = line.strip()
+    else:
+        # Reconstruct disabled line with #
+        raw_line = original_line.strip()
+    
+    return {
+        'schedule': schedule,
+        'command': command,
+        'user': user,
+        'enabled': enabled,
+        'comment': comment,
+        'raw': raw_line
+    }
+
 @app.route('/api/cron/list')
 def list_cron_jobs():
     """List cron jobs for current user"""
     try:
-        result = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
+        result = subprocess.run(['crontab', '-l'], capture_output=True, text=True, check=False)
         if result.returncode == 0:
             jobs = []
-            for line in result.stdout.split('\n'):
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    jobs.append(line)
-            return jsonify({'jobs': jobs})
+            lines = result.stdout.split('\n')
+            current_comment = None
+            
+            for line in lines:
+                stripped = line.strip()
+                
+                # Skip empty lines
+                if not stripped:
+                    continue
+                
+                # Save comments that appear before cron lines
+                # A comment line starts with # and doesn't look like a disabled cron job
+                if stripped.startswith('#'):
+                    stripped_content = stripped.lstrip('#').strip()
+                    
+                    # Check if it looks like a disabled cron job by checking for cron schedule patterns
+                    # A cron schedule has 5 space-separated parts or starts with @
+                    parts = stripped_content.split()
+                    looks_like_cron = False
+                    
+                    if parts and parts[0].startswith('@'):
+                        # Special cron keywords - must be exactly one of these AND have a command
+                        if parts[0] in ['@reboot', '@yearly', '@annually', '@monthly', '@weekly', '@daily', '@midnight', '@hourly']:
+                            # Must have at least a command after the keyword
+                            looks_like_cron = len(parts) >= 2 and (
+                                parts[1].startswith('/') or 
+                                parts[1].startswith('$') or
+                                any(cmd in ' '.join(parts[1:]).lower() for cmd in ['php', 'python', 'bash', 'sh', 'cd', 'echo'])
+                            )
+                    elif len(parts) >= 6:
+                        # Standard cron format: 5 schedule parts + command
+                        # Check if first 5 parts look like a cron schedule
+                        schedule_parts = parts[:5]
+                        # Valid cron schedule contains only numbers, *, -, , /, and ranges
+                        cron_chars = set('0123456789*,-/')
+                        all_parts_valid = True
+                        
+                        # Check each schedule part is valid cron syntax
+                        for part in schedule_parts:
+                            # Remove valid cron separators to check remaining chars
+                            clean_part = part.replace(',', '').replace('-', '').replace('/', '').replace('*', '')
+                            # Remaining should be only digits
+                            if clean_part and not clean_part.isdigit():
+                                all_parts_valid = False
+                                break
+                        
+                        # Also verify there's a real command after the schedule
+                        if all_parts_valid and len(parts) > 5:
+                            command_part = parts[5]
+                            # Command should start with /, $, or be a common command
+                            # Reject if it's just descriptive text
+                            has_command = (command_part.startswith('/') or 
+                                         command_part.startswith('$') or
+                                         command_part in ['cd', 'echo', 'find', 'grep'] or
+                                         any(cmd in command_part.lower() for cmd in ['php', 'python', 'bash', 'sh']))
+                            
+                            # Additional check: if it contains descriptive words it's probably just a comment, not a cron job
+                            # Descriptive comment words that indicate it's not a real cron entry
+                            descriptive_words = {'cron', 'runs', 'every', 'minutes', 'hours', 'daily', 'weekly', 'monthly', 'yearly', 'wordpress', 'core', 'managed', 'manager', 'jobs', 'job'}
+                            
+                            # Check if the content looks like descriptive text (contains these words)
+                            content_lower = stripped_content.lower()
+                            word_count = sum(1 for word in descriptive_words if word in content_lower)
+                            
+                            # If it has 2+ descriptive words, it's likely just a comment
+                            is_descriptive = word_count >= 2
+                            
+                            looks_like_cron = has_command and not is_descriptive
+                    
+                    if not looks_like_cron:
+                        # It's a pure comment line, save it for the next cron job
+                        if len(stripped) > 1 and stripped[1] != '#':
+                            current_comment = stripped[1:].strip()
+                        continue
+                
+                parsed = parse_cron_line(line)
+                if parsed:
+                    if current_comment:
+                        parsed['comment'] = current_comment
+                        current_comment = None
+                    jobs.append(parsed)
+            
+            return jsonify(jobs)
+        elif result.returncode == 1 and 'no crontab' in result.stderr.lower():
+            return jsonify([])
         else:
-            return jsonify({'jobs': [], 'message': 'No crontab or error reading'})
+            return jsonify({'error': result.stderr or 'Error reading crontab'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def validate_cron_schedule(schedule):
+    """Validate cron schedule format"""
+    schedule = schedule.strip()
+    if not schedule:
+        return False
+    
+    # Allow special keywords
+    if schedule.startswith('@'):
+        valid_keywords = ['@reboot', '@yearly', '@annually', '@monthly', '@weekly', '@daily', '@midnight', '@hourly']
+        return schedule in valid_keywords
+    
+    # Validate standard cron format: min hour day month weekday
+    parts = schedule.split()
+    if len(parts) != 5:
+        return False
+    
+    # Basic validation - each part should contain valid cron characters
+    valid_chars = set('0123456789*,-/')
+    for part in parts:
+        if not all(c in valid_chars or c.isdigit() for c in part):
+            return False
+    
+    return True
+
+def clean_crontab_lines(lines):
+    """Remove empty lines and ensure proper formatting"""
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        # Keep non-empty lines and comments
+        if stripped:
+            cleaned.append(line)
+    return cleaned
+
+@app.route('/api/cron/create', methods=['POST'])
+def create_cron_job():
+    """Create a new cron job"""
+    try:
+        data = request.json or {}
+        schedule = data.get('schedule', '').strip()
+        command = data.get('command', '').strip()
+        comment = data.get('comment', '').strip()
+        enabled = data.get('enabled', True)
+        
+        if not schedule or not command:
+            return jsonify({'error': 'Schedule and command are required'}), 400
+        
+        # Validate schedule format
+        if not validate_cron_schedule(schedule):
+            return jsonify({'error': f'Invalid cron schedule format: {schedule}. Expected format: "minute hour day month weekday" or special keywords like @daily, @hourly'}), 400
+        
+        # Read current crontab
+        result = subprocess.run(['crontab', '-l'], capture_output=True, text=True, check=False)
+        current_lines = result.stdout.split('\n') if result.returncode == 0 else []
+        
+        # Clean existing lines (remove empty ones)
+        current_lines = clean_crontab_lines(current_lines)
+        
+        # Prepare new lines
+        new_lines = list(current_lines)
+        
+        # Add comment if provided
+        if comment:
+            new_lines.append(f"# {comment}")
+        
+        # Prepare cron line
+        cron_line = f"{schedule} {command}"
+        if not enabled:
+            cron_line = f"# {cron_line}"
+        new_lines.append(cron_line)
+        
+        # Write new crontab (ensure no trailing empty lines)
+        input_data = '\n'.join(new_lines) + '\n'
+        process = subprocess.run(['crontab', '-'], input=input_data, text=True, capture_output=True)
+        
+        if process.returncode == 0:
+            return jsonify({'success': True, 'message': 'Cron job created'})
+        else:
+            error_msg = process.stderr or process.stdout or 'Failed to create cron job'
+            return jsonify({'error': f'Crontab error: {error_msg}'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cron/delete', methods=['POST'])
+def delete_cron_job():
+    """Delete a cron job by raw line"""
+    try:
+        data = request.json or {}
+        raw_line = data.get('raw_line', '').strip()
+        
+        if not raw_line:
+            return jsonify({'error': 'raw_line is required'}), 400
+        
+        # Read current crontab
+        result = subprocess.run(['crontab', '-l'], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return jsonify({'error': 'No crontab found'}), 404
+        
+        lines = result.stdout.split('\n')
+        # Match by exact line or by line without leading/trailing whitespace
+        new_lines = []
+        for line in lines:
+            if line.strip() != raw_line.strip():
+                new_lines.append(line)
+        
+        # Clean lines and ensure no empty lines
+        new_lines = clean_crontab_lines(new_lines)
+        
+        # Write new crontab
+        if new_lines:
+            input_data = '\n'.join(new_lines) + '\n'
+        else:
+            # Empty crontab - crontab doesn't like completely empty input, so use a comment
+            input_data = "# Cron jobs managed by Website Manager\n"
+        
+        process = subprocess.run(['crontab', '-'], input=input_data, text=True, capture_output=True)
+        
+        if process.returncode == 0:
+            return jsonify({'success': True, 'message': 'Cron job deleted'})
+        else:
+            error_msg = process.stderr or process.stdout or 'Failed to delete cron job'
+            return jsonify({'error': f'Crontab error: {error_msg}'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cron/toggle', methods=['POST'])
+def toggle_cron_job():
+    """Enable or disable a cron job"""
+    try:
+        data = request.json or {}
+        raw_line = data.get('raw_line', '').strip()
+        enabled = data.get('enabled', True)
+        
+        if not raw_line:
+            return jsonify({'error': 'raw_line is required'}), 400
+        
+        # Read current crontab
+        result = subprocess.run(['crontab', '-l'], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return jsonify({'error': 'No crontab found'}), 404
+        
+        lines = result.stdout.split('\n')
+        new_lines = []
+        matched = False
+        
+        for line in lines:
+            stripped_line = line.strip()
+            if not stripped_line:
+                # Skip empty lines
+                continue
+                
+            if stripped_line == raw_line.strip():
+                matched = True
+                # Toggle the line
+                if enabled:
+                    # Enable: remove leading # if present, preserve indentation
+                    stripped = line.lstrip()
+                    if stripped.startswith('#'):
+                        # Remove the # and preserve original spacing
+                        indent = len(line) - len(line.lstrip())
+                        new_line = ' ' * indent + stripped[1:].lstrip()
+                    else:
+                        new_line = line
+                else:
+                    # Disable: add # if not present, preserve structure
+                    stripped = line.lstrip()
+                    if not stripped.startswith('#'):
+                        indent = len(line) - len(line.lstrip())
+                        new_line = ' ' * indent + '# ' + stripped
+                    else:
+                        new_line = line
+                new_lines.append(new_line)
+            else:
+                new_lines.append(line)
+        
+        if not matched:
+            return jsonify({'error': 'Cron job not found'}), 404
+        
+        # Clean lines and ensure no empty lines
+        new_lines = clean_crontab_lines(new_lines)
+        
+        # Write new crontab
+        if new_lines:
+            input_data = '\n'.join(new_lines) + '\n'
+        else:
+            input_data = "# Cron jobs managed by Website Manager\n"
+        
+        process = subprocess.run(['crontab', '-'], input=input_data, text=True, capture_output=True)
+        
+        if process.returncode == 0:
+            return jsonify({'success': True, 'message': 'Cron job updated'})
+        else:
+            error_msg = process.stderr or process.stdout or 'Failed to update cron job'
+            return jsonify({'error': f'Crontab error: {error_msg}'}), 500
+            
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -2110,6 +2525,103 @@ def save_cloudflare_config(config):
     except Exception as e:
         print(f"Error saving Cloudflare config: {e}")
         return False
+
+def log_cloudflare_email_event(action, zone_id=None, account_id=None, status=None, info=None):
+    """Utility logger for Cloudflare email routing actions"""
+    msg = f"[Cloudflare Email] action={action}"
+    if zone_id:
+        msg += f" zone={zone_id}"
+    if account_id:
+        msg += f" account={account_id}"
+    if status is not None:
+        msg += f" status={status}"
+    if info:
+        msg += f" info={info}"
+    app.logger.info(msg)
+
+
+def perform_cloudflare_request(method, url, *, headers=None, max_attempts=3, backoff_seconds=1, **kwargs):
+def perform_cloudflare_request(method, url, *, headers=None, max_attempts=3, backoff_seconds=1, **kwargs):
+    """Wrapper around requests with simple retry/backoff for 429 responses"""
+    attempt = 1
+    last_response = None
+    while attempt <= max_attempts:
+        response = requests.request(method.upper(), url, headers=headers, **kwargs)
+        last_response = response
+        if response.status_code != 429:
+            return response
+        log_cloudflare_email_event(
+            'cloudflare_rate_limited',
+            status=response.status_code,
+            info=f"url={url} attempt={attempt}"
+        )
+        if attempt == max_attempts:
+            break
+        time.sleep(backoff_seconds * attempt)
+        attempt += 1
+    return last_response
+
+
+def fetch_cloudflare_destinations(account_id, headers):
+    """Return dict of destination tag -> destination info"""
+    try:
+        response = perform_cloudflare_request(
+            'GET',
+            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/email/routing/addresses",
+            headers=headers
+        )
+        log_cloudflare_email_event('fetch_destinations', account_id=account_id, status=response.status_code)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                return {addr.get('tag'): addr for addr in data.get('result', [])}
+        return {}
+    except Exception as e:
+        log_cloudflare_email_event('fetch_destinations_exception', account_id=account_id, info=str(e))
+        return {}
+
+
+def ensure_destination(account_id, destination_email, headers):
+    """Find or create a destination for the given email. Returns destination tag"""
+    destinations = fetch_cloudflare_destinations(account_id, headers)
+    for tag, addr in destinations.items():
+        if addr.get('email', '').lower() == destination_email.lower():
+            return tag
+    # Create destination
+    response = perform_cloudflare_request(
+        'POST',
+        f"https://api.cloudflare.com/client/v4/accounts/{account_id}/email/routing/addresses",
+        headers=headers,
+        json={'email': destination_email}
+    )
+    log_cloudflare_email_event('create_destination', account_id=account_id, status=response.status_code, info=destination_email)
+    try:
+        response.raise_for_status()
+        data = response.json()
+        if data.get('success') and data.get('result'):
+            return data['result'].get('tag')
+    except Exception as e:
+        log_cloudflare_email_event('create_destination_exception', account_id=account_id, info=str(e))
+    return None
+
+
+def fetch_rule(account_id, rule_tag, headers, zone_id=None):
+    """Fetch a single rule by tag"""
+    params = {'zone_id': zone_id} if zone_id else {}
+    response = perform_cloudflare_request(
+        'GET',
+        f"https://api.cloudflare.com/client/v4/accounts/{account_id}/email/routing/rules",
+        headers=headers,
+        params=params
+    )
+    log_cloudflare_email_event('fetch_rules', zone_id=zone_id, account_id=account_id, status=response.status_code)
+    if response.status_code == 200:
+        data = response.json()
+        if data.get('success'):
+            for rule in data.get('result', []):
+                if rule.get('tag') == rule_tag:
+                    return rule
+    return None
 
 def get_cloudflare_headers():
     """Get Cloudflare API headers - prefer API keys for email routing, fallback to token"""
@@ -2187,6 +2699,8 @@ def list_cloudflare_zones():
                 zones_list.append({
                     'id': zone.get('id', ''),
                     'name': zone.get('name', ''),
+                    'account_id': zone.get('account', {}).get('id', '') if isinstance(zone.get('account'), dict) else '',
+                    'account_name': zone.get('account', {}).get('name', '') if isinstance(zone.get('account'), dict) else '',
                     'status': zone.get('status', ''),
                     'plan': zone.get('plan', {}).get('name', 'Free') if isinstance(zone.get('plan'), dict) else 'Free',
                     'development_mode': zone.get('development_mode', 0),
@@ -2375,48 +2889,116 @@ def list_email_addresses(zone_id):
     if not headers:
         return jsonify({'error': 'Cloudflare API not configured'}), 400
     
+    account_id = request.args.get('account_id', '').strip()
+    if not account_id:
+        log_cloudflare_email_event('list_addresses_missing_account', zone_id=zone_id)
+        return jsonify({'error': 'Cloudflare account_id is required'}), 400
+    
+    log_cloudflare_email_event('list_addresses_start', zone_id=zone_id, account_id=account_id)
+    
     try:
         if not REQUESTS_AVAILABLE:
             return jsonify({'error': 'requests library not installed'}), 500
         
-        response = requests.get(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/addresses", headers=headers)
-        if response.status_code == 404:
-            return jsonify([])
-        response.raise_for_status()
-        result = response.json()
+        params = {'zone_id': zone_id} if zone_id else {}
+        destinations = fetch_cloudflare_destinations(account_id, headers)
         
+        rules_response = perform_cloudflare_request(
+            'GET',
+            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/email/routing/rules",
+            headers=headers,
+            params=params
+        )
+        log_cloudflare_email_event(
+            'list_rules_response',
+            zone_id=zone_id,
+            account_id=account_id,
+            status=rules_response.status_code
+        )
+        
+        if rules_response.status_code == 404:
+            log_cloudflare_email_event('list_rules_404', zone_id=zone_id, account_id=account_id)
+            return jsonify([])
+        
+        if rules_response.status_code != 200:
+            try:
+                error_data = rules_response.json()
+                error_msg = error_data.get('errors', [{}])[0].get('message', 'Unknown error')
+            except:
+                error_msg = f'HTTP {rules_response.status_code}'
+            log_cloudflare_email_event(
+                'list_rules_error',
+                zone_id=zone_id,
+                account_id=account_id,
+                status=rules_response.status_code,
+                info=error_msg
+            )
+            return jsonify({'error': error_msg}), rules_response.status_code
+        
+        rules_data = rules_response.json()
         addresses = []
-        if result.get('success') and result.get('result'):
-            for addr in result['result']:
-                destination = None
-                try:
-                    rules_response = requests.get(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/rules", headers=headers)
-                    if rules_response.status_code == 200:
-                        rules_result = rules_response.json()
-                        if rules_result.get('success'):
-                            for rule in rules_result.get('result', []):
-                                for matcher in rule.get('matchers', []):
-                                    if matcher.get('value') == addr.get('email'):
-                                        for action in rule.get('actions', []):
-                                            if action.get('type') == 'forward':
-                                                forward_values = action.get('value', [])
-                                                if forward_values:
-                                                    destination = forward_values[0]
-                                                break
-                except:
-                    pass
+        if rules_data.get('success'):
+            for rule in rules_data.get('result', []):
+                alias_email = ''
+                for matcher in rule.get('matchers', []):
+                    if matcher.get('field') == 'to' and matcher.get('type') == 'literal':
+                        alias_email = matcher.get('value', '')
+                        break
+                
+                destination_tag = None
+                destination_email = None
+                destination_verified = False
+                for action in rule.get('actions', []):
+                    if action.get('type') == 'forward':
+                        forward_values = action.get('value', [])
+                        if forward_values:
+                            destination_tag = forward_values[0]
+                            dest_info = destinations.get(destination_tag)
+                            if isinstance(dest_info, dict):
+                                destination_email = dest_info.get('email')
+                                destination_verified = dest_info.get('verified', False)
+                            else:
+                                destination_email = destination_tag
+                        break
                 
                 addresses.append({
-                    'tag': addr.get('tag', ''),
-                    'email': addr.get('email', ''),
-                    'verified': addr.get('verified', False),
-                    'created': str(addr.get('created', '')),
-                    'modified': str(addr.get('modified', '')),
-                    'destination': destination
+                    'tag': rule.get('tag', ''),
+                    'email': alias_email,
+                    'verified': destination_verified,
+                    'created': str(rule.get('created', '')),
+                    'modified': str(rule.get('modified', '')),
+                    'destination': destination_email,
+                    'destination_tag': destination_tag,
+                    'enabled': rule.get('enabled', True)
                 })
+        
+        log_cloudflare_email_event(
+            'list_addresses_success',
+            zone_id=zone_id,
+            account_id=account_id,
+            info=f"count={len(addresses)}"
+        )
         return jsonify(addresses)
-    except:
-        return jsonify([])
+    except requests.exceptions.RequestException as e:
+        # Handle network errors and other request exceptions
+        log_cloudflare_email_event(
+            'list_addresses_request_exception',
+            zone_id=zone_id,
+            account_id=account_id,
+            info=str(e)
+        )
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        # Handle any other exceptions
+        import traceback
+        traceback.print_exc()
+        log_cloudflare_email_event(
+            'list_addresses_exception',
+            zone_id=zone_id,
+            account_id=account_id,
+            info=str(e)
+        )
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/cloudflare/zones/<zone_id>/email/addresses', methods=['POST'])
 def create_email_address(zone_id):
@@ -2428,37 +3010,78 @@ def create_email_address(zone_id):
     data = request.json
     email = data.get('email', '').strip()
     destination = data.get('destination', '').strip()
+    account_id = data.get('account_id', '').strip()
     
     if not email or not destination:
+        log_cloudflare_email_event('create_address_missing_fields', zone_id=zone_id, account_id=account_id, info='email/destination')
         return jsonify({'error': 'Email and destination required'}), 400
+    if not account_id:
+        log_cloudflare_email_event('create_address_missing_account', zone_id=zone_id)
+        return jsonify({'error': 'Cloudflare account_id is required'}), 400
+    
+    log_cloudflare_email_event(
+        'create_address_start',
+        zone_id=zone_id,
+        account_id=account_id,
+        info=f"email={email} destination={destination}"
+    )
     
     try:
         if not REQUESTS_AVAILABLE:
             return jsonify({'error': 'requests library not installed'}), 500
         
-        response = requests.post(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/addresses", headers=headers, json={'email': email})
-        response.raise_for_status()
-        result = response.json()
+        destination_tag = ensure_destination(account_id, destination, headers)
+        if not destination_tag:
+            return jsonify({'error': 'Failed to create destination address'}), 500
         
-        if result.get('success') and result.get('result'):
-            tag = result['result'].get('tag', '')
-            if tag:
-                try:
-                    requests.post(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/rules", headers=headers, json={
-                        'name': email, 'enabled': True,
-                        'matchers': [{'type': 'literal', 'field': 'to', 'value': email}],
-                        'actions': [{'type': 'forward', 'value': [destination]}]
-                    })
-                except:
-                    pass
-            
-            return jsonify({'success': True, 'tag': tag, 'email': email, 'destination': destination})
-        return jsonify({'error': 'Failed to create'}), 500
+        rule_payload = {
+            'name': email,
+            'enabled': True,
+            'zone_id': zone_id,
+            'matchers': [{'type': 'literal', 'field': 'to', 'value': email}],
+            'actions': [{'type': 'forward', 'value': [destination_tag]}]
+        }
+        rule_response = perform_cloudflare_request(
+            'POST',
+            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/email/routing/rules",
+            headers=headers,
+            json=rule_payload
+        )
+        log_cloudflare_email_event(
+            'create_rule_response',
+            zone_id=zone_id,
+            account_id=account_id,
+            status=rule_response.status_code
+        )
+        rule_response.raise_for_status()
+        rule_data = rule_response.json()
+        if rule_data.get('success') and rule_data.get('result'):
+            rule = rule_data['result']
+            return jsonify({
+                'success': True,
+                'tag': rule.get('tag', ''),
+                'email': email,
+                'destination': destination
+            })
+        return jsonify({'error': 'Failed to create route'}), 500
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 405:
             return jsonify({'error': 'POST method not allowed for API token. Use API keys for full access.'}), 405
+        log_cloudflare_email_event(
+            'create_address_http_error',
+            zone_id=zone_id,
+            account_id=account_id,
+            status=e.response.status_code,
+            info=e.response.text if e.response is not None else str(e)
+        )
         return jsonify({'error': str(e)}), 500
     except Exception as e:
+        log_cloudflare_email_event(
+            'create_address_exception',
+            zone_id=zone_id,
+            account_id=account_id,
+            info=str(e)
+        )
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/cloudflare/zones/<zone_id>/email/addresses/<address_tag>', methods=['PUT'])
@@ -2470,18 +3093,53 @@ def update_email_address(zone_id, address_tag):
     
     data = request.json
     destination = data.get('destination', '').strip()
+    account_id = data.get('account_id', '').strip()
     
     if not destination:
+        log_cloudflare_email_event('update_address_missing_destination', zone_id=zone_id, account_id=account_id, info=address_tag)
         return jsonify({'error': 'Destination required'}), 400
+    if not account_id:
+        log_cloudflare_email_event('update_address_missing_account', zone_id=zone_id, info=address_tag)
+        return jsonify({'error': 'Cloudflare account_id is required'}), 400
+    
+    log_cloudflare_email_event(
+        'update_address_start',
+        zone_id=zone_id,
+        account_id=account_id,
+        info=f"tag={address_tag}"
+    )
     
     try:
         if not REQUESTS_AVAILABLE:
             return jsonify({'error': 'requests library not installed'}), 500
         
-        addr_response = requests.get(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/addresses/{address_tag}", headers=headers)
+        addr_response = perform_cloudflare_request(
+            'GET',
+            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/email/routing/addresses/{address_tag}",
+            headers=headers,
+            params={'zone_id': zone_id}
+        )
+        log_cloudflare_email_event(
+            'update_address_fetch',
+            zone_id=zone_id,
+            account_id=account_id,
+            status=addr_response.status_code,
+            info=f"tag={address_tag}"
+        )
         addr_email = addr_response.json().get('result', {}).get('email') if addr_response.status_code == 200 else None
         
-        rules_response = requests.get(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/rules", headers=headers)
+        rules_response = perform_cloudflare_request(
+            'GET',
+            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/email/routing/rules",
+            headers=headers,
+            params={'zone_id': zone_id}
+        )
+        log_cloudflare_email_event(
+            'update_rule_fetch',
+            zone_id=zone_id,
+            account_id=account_id,
+            status=rules_response.status_code
+        )
         rule_tag = None
         if rules_response.status_code == 200:
             for rule in rules_response.json().get('result', []):
@@ -2491,16 +3149,42 @@ def update_email_address(zone_id, address_tag):
                         break
         
         if rule_tag:
-            requests.put(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/rules/{rule_tag}", headers=headers, json={'actions': [{'type': 'forward', 'value': [destination]}]})
+            perform_cloudflare_request(
+                'PUT',
+                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/email/routing/rules/{rule_tag}",
+                headers=headers,
+                json={
+                    'zone_id': zone_id,
+                    'actions': [{'type': 'forward', 'value': [destination]}]
+                }
+            )
         else:
-            requests.post(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/rules", headers=headers, json={
-                'name': addr_email, 'enabled': True,
-                'matchers': [{'type': 'literal', 'field': 'to', 'value': addr_email}],
-                'actions': [{'type': 'forward', 'value': [destination]}]
-            })
-        
+            perform_cloudflare_request(
+                'POST',
+                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/email/routing/rules",
+                headers=headers,
+                json={
+                    'name': addr_email,
+                    'enabled': True,
+                    'zone_id': zone_id,
+                    'matchers': [{'type': 'literal', 'field': 'to', 'value': addr_email}],
+                    'actions': [{'type': 'forward', 'value': [destination]}]
+                }
+            )
+        log_cloudflare_email_event(
+            'update_address_success',
+            zone_id=zone_id,
+            account_id=account_id,
+            info=f"tag={address_tag}"
+        )
         return jsonify({'success': True})
     except Exception as e:
+        log_cloudflare_email_event(
+            'update_address_exception',
+            zone_id=zone_id,
+            account_id=account_id,
+            info=str(e)
+        )
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/cloudflare/zones/<zone_id>/email/addresses/<address_tag>', methods=['DELETE'])
@@ -2510,13 +3194,39 @@ def delete_email_address(zone_id, address_tag):
     if not headers:
         return jsonify({'error': 'Cloudflare API not configured'}), 400
     
+    account_id = request.args.get('account_id', '').strip()
+    if not account_id:
+        log_cloudflare_email_event('delete_address_missing_account', zone_id=zone_id, info=address_tag)
+        return jsonify({'error': 'Cloudflare account_id is required'}), 400
+    
+    log_cloudflare_email_event('delete_address_start', zone_id=zone_id, account_id=account_id, info=f"tag={address_tag}")
+    
     try:
         if not REQUESTS_AVAILABLE:
             return jsonify({'error': 'requests library not installed'}), 500
         
-        requests.delete(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/addresses/{address_tag}", headers=headers)
+        response = perform_cloudflare_request(
+            'DELETE',
+            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/email/routing/addresses/{address_tag}",
+            headers=headers,
+            params={'zone_id': zone_id}
+        )
+        log_cloudflare_email_event(
+            'delete_address_response',
+            zone_id=zone_id,
+            account_id=account_id,
+            status=response.status_code
+        )
+        response.raise_for_status()
+        log_cloudflare_email_event('delete_address_success', zone_id=zone_id, account_id=account_id, info=f"tag={address_tag}")
         return jsonify({'success': True})
     except Exception as e:
+        log_cloudflare_email_event(
+            'delete_address_exception',
+            zone_id=zone_id,
+            account_id=account_id,
+            info=str(e)
+        )
         return jsonify({'error': str(e)}), 500
 
 # ==================== EMAIL SERVER MANAGEMENT ====================

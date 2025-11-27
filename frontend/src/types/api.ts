@@ -50,4 +50,9 @@ export interface SystemInfo {
 export interface CronJob {
   schedule: string;
   command: string;
+  user?: string;
+  enabled: boolean;
+  comment?: string;
+  raw: string;
+  last_run?: string;
 }
